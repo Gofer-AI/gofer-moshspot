@@ -5,7 +5,7 @@
 This repo is MoshSpot's test rig: a lightweight browser simulation of a concert: a venue layout, a crowd of up to 3,000 people, and 4 fixed CCTV-style cameras. Its frames go straight into the MoshSpot worker, and it writes exact ground truth for the evaluation harness. No build step and no GPU. Three.js comes from a CDN, and the bridge uses only the Python standard library.
 
 ```bash
-python3 bridge.py            # → http://localhost:8780  (PORT env var to change)
+python3 bridge.py --record   # → http://localhost:8780  (PORT env var to change; --record allows saving runs)
 ```
 Requires Python 3.9+ and a browser with WebGL. No `pip install` needed.
 
@@ -49,7 +49,7 @@ Trigger incidents by clicking a camera tile or the map, with the buttons, or thr
 cap = cv.VideoCapture("http://localhost:8780/mjpeg/CAM-1")   # CAM-1..CAM-4, at the sim's fps (default 5)
 ```
 
-**Recorded run** (deterministic, faster than real time; 180 s of sim records in about 30 s). Choose a scenario and seed, then click **Record run**:
+**Recorded run** (deterministic, faster than real time; 180 s of sim records in about 30 s). Choose a scenario and seed, then click **Record run** (the bridge must be started with `--record`; it's off by default):
 ```
 runs/<run>/CAM-1/000000.jpg …     cv.VideoCapture("runs/<run>/CAM-1/%06d.jpg")   # frame k ↔ t = k / fps
 runs/<run>/gt.json                calibration, venue map, incidents
@@ -113,8 +113,17 @@ Coordinates: `X`/`Y` are the venue floor metres MoshSpot already computes from t
 - **People who are already down were not detected** in our tests. They were either hidden by standing people or were a dark shape inside a ring of crouching helpers. This matches the real-world problem, and it's why MoshSpot tracks the **fall onset** while the person is still visible and uses help-ring and immobility signals.
 - The figures are low-poly, so treat absolute detector numbers as a lower bound. Use the sim to test the **pipeline logic** (tracking, state machine, agent, dispatch, escalation), not to benchmark a detector.
 
+## Security (anything beyond localhost)
+- **Token:** set `MOSHSPOT_TOKEN` (16+ characters, e.g. `openssl rand -hex 24`) and every API call needs it, as `Authorization: Bearer <token>`, `X-MoshSpot-Token`, or `?token=` (for MJPEG URLs in `cv.VideoCapture`). Only the page itself and `/status` stay public. Open the page as `https://host/#token=<token>`; the fragment never reaches the server or its logs, and the page removes it from the address bar.
+- **Refuses to start** on a non-loopback `--host` (such as `0.0.0.0`) without a token.
+- **Limits:** request bodies are capped (4 MB per frame, 32 MB for `gt.json`, 64 KB for commands and events), with at most 16 cameras, 64 teams and 32 concurrent MJPEG viewers. The command and event queues keep the last 1,000 entries, and a 30 s socket timeout stops idle clients from tying up threads.
+- **Recording is off by default:** `--record` (or `MOSHSPOT_RECORD=1`) is the only way the bridge writes to disk.
+- The bridge speaks plain HTTP. Put it behind HTTPS (Caddy or an AWS load balancer). See [DEPLOY.md](DEPLOY.md).
+
+With a token set, add it to the curl calls above: `curl -H "Authorization: Bearer $MOSHSPOT_TOKEN" …`
+
 ## Hosting for judges
-`web/index.html` also works as a static page (S3 + CloudFront) without the bridge: the sim runs and **Download GT** works, but frames aren't streamed. For the always-on demo, run `bridge.py` next to the worker on EC2 so the sim is the live "camera" source in place of replay-as-live.
+See [DEPLOY.md](DEPLOY.md): MoshSpot's worker and this bridge on one Graviton instance running COOL, behind HTTPS. `web/index.html` also works as a plain static page (S3 + CloudFront) without the bridge; the sim runs and **Download GT** works, but frames aren't streamed anywhere.
 
 ## License
 [MIT](LICENSE) © 2026 Gofer AI

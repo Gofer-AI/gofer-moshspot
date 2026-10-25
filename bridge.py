@@ -2,12 +2,14 @@
 """MoshSpot sim bridge: serves the simulator and turns its camera frames into
 inputs the MoshSpot worker can ingest. Standard library only.
 
-  python3 bridge.py                 # open http://localhost:8780
+  python3 bridge.py                      # local dev: http://localhost:8780
+  python3 bridge.py --record             # also allow saving recorded runs to runs/
+  MOSHSPOT_TOKEN=... python3 bridge.py   # require a token (mandatory off-localhost)
 
-Live (real time, MJPEG over HTTP — cv.VideoCapture reads it like a camera):
-  cv.VideoCapture("http://localhost:8780/mjpeg/CAM-1")
+Live (real time, MJPEG over HTTP; cv.VideoCapture reads it like a camera):
+  cv.VideoCapture("http://localhost:8780/mjpeg/CAM-1")            # add ?token=... when auth is on
 
-Recorded runs (deterministic; frame k is at t = k / fps of sim time):
+Recorded runs (needs --record; frame k is at t = k / fps of sim time):
   runs/<run>/CAM-1/000000.jpg ...   cv.VideoCapture("runs/<run>/CAM-1/%06d.jpg")
   runs/<run>/gt.json                calibration + venue + incident ground truth
   runs/<run>/gt_frames.jsonl        per-frame boxes/keypoints of non-upright people
@@ -16,29 +18,64 @@ Dispatch loop (MoshSpot -> sim EMT teams walk to the patient):
   POST /dispatch {"action":"dispatch","team":"EMT-1","X":-6.2,"Y":40.1,"incident_id":"ms-42"}
        action: dispatch | accept | resolve | false_alarm | cancel  (team optional on dispatch = nearest free)
   GET  /emt?after=N   team status events from the sim: dispatched, accepted, en_route, on_scene, resolved, ...
+
+Auth: when a token is set, every endpoint except the page itself and /status needs it, as
+"Authorization: Bearer <token>", "X-MoshSpot-Token: <token>", or "?token=<token>" (for MJPEG URLs).
+The page picks it up from its URL fragment: https://host/#token=<token>.
 """
 import argparse
+import hmac
 import json
 import os
 import re
+import sys
 import threading
+from collections import deque
+from dataclasses import dataclass, field
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
-RUNS = ROOT / "runs"
 SAFE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
-
-latest: dict[str, bytes] = {}  # camera id -> most recent JPEG
-cond = threading.Condition()
-
-# dispatch loop: MoshSpot -> /dispatch -> commands (sim polls) ; sim -> /emt-events -> MoshSpot polls /emt
 ACTIONS = {"dispatch", "accept", "resolve", "false_alarm", "cancel"}
-commands: list[dict] = []
-emt_events: list[dict] = []
-emt_teams: dict[str, dict] = {}
-lock = threading.Lock()
+PUBLIC_GET = {"/", "/index.html", "/status"}
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+@dataclass
+class Config:
+    token: Optional[str] = None
+    record: bool = False
+    runs_dir: Path = ROOT / "runs"
+    max_frame_bytes: int = 4 << 20       # one JPEG (1280x720 at q=0.85 is ~200 KB)
+    max_gt_bytes: int = 32 << 20         # gt.json at the end of a run
+    max_gt_frame_bytes: int = 1 << 20    # one line of gt_frames.jsonl
+    max_json_bytes: int = 64 << 10       # dispatch commands, EMT events
+    max_cams: int = 16
+    max_teams: int = 64
+    max_streams: int = 32                # concurrent MJPEG viewers
+    queue_len: int = 1000                # commands / EMT events kept for polling
+
+
+@dataclass
+class State:
+    cfg: Config
+    latest: dict = field(default_factory=dict)  # camera id -> most recent JPEG
+    cond: threading.Condition = field(default_factory=threading.Condition)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    commands: deque = None
+    events: deque = None
+    teams: dict = field(default_factory=dict)
+    last_cmd: int = 0
+    last_event: int = 0
+    streams: threading.BoundedSemaphore = None
+
+    def __post_init__(self):
+        self.commands = deque(maxlen=self.cfg.queue_len)
+        self.events = deque(maxlen=self.cfg.queue_len)
+        self.streams = threading.BoundedSemaphore(self.cfg.max_streams)
 
 
 def _json(body):
@@ -70,63 +107,135 @@ def _validate_dispatch(cmd):
 
 
 class Handler(SimpleHTTPRequestHandler):
+    timeout = 30  # seconds; stops idle/slow clients from pinning threads
+
     def __init__(self, *a, **k):
         super().__init__(*a, directory=str(ROOT / "web"), **k)
 
+    @property
+    def st(self) -> State:
+        return self.server.state
+
     def log_message(self, fmt, *args):
         pass
+
+    def end_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        super().end_headers()
+
+    def list_directory(self, path):
+        self.send_error(404)
+        return None
 
     def _send(self, code, body=b"", ctype="application/json"):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _err(self, code, msg):
+        self.close_connection = True  # the request body may be unread; never reuse this connection
+        return self._send(code, json.dumps({"error": msg}).encode())
+
+    def _authorized(self, q):
+        tok = self.st.cfg.token
+        if not tok:
+            return True
+        auth = self.headers.get("Authorization", "")
+        given = auth[7:] if auth.startswith("Bearer ") else self.headers.get("X-MoshSpot-Token") or q.get("token", "")
+        return hmac.compare_digest(given.encode(), tok.encode())
+
+    def _body(self, cap):
+        """Read the request body, refusing anything without a length or over `cap` bytes."""
+        try:
+            n = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self.close_connection = True
+            self._err(411, "Content-Length required")
+            return None
+        if n < 0 or n > cap:
+            self.close_connection = True  # don't read it; drop the connection after replying
+            self._err(413, f"body too large (max {cap} bytes)")
+            return None
+        return self.rfile.read(n)
 
     def do_POST(self):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if not self._authorized(q):
+            self.close_connection = True
+            return self._err(401, "token required")
+        cfg, st = self.st.cfg, self.st
         parts = u.path.strip("/").split("/")
         run = q.get("run")
-        if run is not None and not SAFE.match(run):
-            return self._send(400, b'{"error":"bad run name"}')
+        if run is not None:
+            if not cfg.record:
+                self.close_connection = True
+                return self._err(403, "recording is disabled; start the bridge with --record")
+            if not SAFE.match(run):
+                return self._err(400, "bad run name")
 
         if parts[0] == "frame" and len(parts) == 2 and SAFE.match(parts[1]):
             cam = parts[1]
-            with cond:
-                latest[cam] = body
-                cond.notify_all()
+            body = self._body(cfg.max_frame_bytes)
+            if body is None:
+                return
+            with st.cond:
+                if cam not in st.latest and len(st.latest) >= cfg.max_cams:
+                    return self._err(400, "too many cameras")
+                st.latest[cam] = body
+                st.cond.notify_all()
             if run:
-                d = RUNS / run / cam
+                idx = q.get("idx", "")
+                if not (idx.isdigit() and int(idx) < 1_000_000):
+                    return self._err(400, "idx must be 0..999999")
+                d = cfg.runs_dir / run / cam
                 d.mkdir(parents=True, exist_ok=True)
-                (d / f"{int(q.get('idx', 0)):06d}.jpg").write_bytes(body)
+                (d / f"{int(idx):06d}.jpg").write_bytes(body)
             return self._send(204)
 
         if u.path == "/dispatch":
+            body = self._body(cfg.max_json_bytes)
+            if body is None:
+                return
             cmd = _json(body)
             err = "body must be a JSON object" if cmd is None else _validate_dispatch(cmd)
             if err:
-                return self._send(400, json.dumps({"error": err}).encode())
+                return self._err(400, err)
             keep = {k: cmd[k] for k in ("action", "team", "incident_id", "X", "Y") if k in cmd}
             keep.setdefault("action", "dispatch")
-            with lock:
-                keep["id"] = len(commands) + 1
-                commands.append(keep)
+            with st.lock:
+                st.last_cmd += 1
+                keep["id"] = st.last_cmd
+                st.commands.append(keep)
             return self._send(202, json.dumps({"ok": True, "id": keep["id"]}).encode())
 
         if u.path == "/emt-events":
+            body = self._body(cfg.max_json_bytes)
+            if body is None:
+                return
             ev = _json(body)
             if ev is None or not SAFE.match(str(ev.get("team", ""))):
-                return self._send(400, b'{"error":"bad event"}')
-            with lock:
-                ev["seq"] = len(emt_events) + 1
-                emt_events.append(ev)
-                emt_teams[ev["team"]] = ev
+                return self._err(400, "bad event")
+            with st.lock:
+                if ev["team"] not in st.teams and len(st.teams) >= cfg.max_teams:
+                    return self._err(400, "too many teams")
+                st.last_event += 1
+                ev["seq"] = st.last_event
+                st.events.append(ev)
+                st.teams[ev["team"]] = ev
             return self._send(204)
 
-        if parts[0] in ("gt", "gt-frames") and run:
-            d = RUNS / run
+        if parts[0] in ("gt", "gt-frames") and len(parts) == 1:
+            if not run:
+                return self._err(400 if cfg.record else 403, "run required" if cfg.record else "recording is disabled; start the bridge with --record")
+            body = self._body(cfg.max_gt_bytes if parts[0] == "gt" else cfg.max_gt_frame_bytes)
+            if body is None:
+                return
+            d = cfg.runs_dir / run
             d.mkdir(parents=True, exist_ok=True)
             if parts[0] == "gt":
                 (d / "gt.json").write_bytes(body)
@@ -136,53 +245,91 @@ class Handler(SimpleHTTPRequestHandler):
                     f.write(body.rstrip(b"\n") + b"\n")
             return self._send(204)
 
-        self._send(404, b'{"error":"not found"}')
+        self._err(404, "not found")
 
     def do_GET(self):
         u = urlparse(self.path)
-        if u.path == "/status":
-            return self._send(200, json.dumps({"ok": True, "cams": sorted(latest)}).encode())
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        cfg, st = self.st.cfg, self.st
+        if u.path == "/status":  # public health check; says what the page needs to know, nothing more
+            return self._send(200, json.dumps({"ok": True, "auth_required": bool(cfg.token), "record": cfg.record,
+                                               "authorized": self._authorized(q)}).encode())
+        if u.path not in PUBLIC_GET and not self._authorized(q):
+            self.close_connection = True
+            return self._err(401, "token required")
         after = int(q["after"]) if q.get("after", "").isdigit() else 0
         if u.path == "/commands":
-            with lock:
-                return self._send(200, json.dumps({"commands": commands[after:], "last": len(commands)}).encode())
+            with st.lock:
+                return self._send(200, json.dumps({"commands": [c for c in st.commands if c["id"] > after],
+                                                   "last": st.last_cmd}).encode())
         if u.path == "/emt":
-            with lock:
-                return self._send(200, json.dumps({"teams": emt_teams, "events": emt_events[after:], "last": len(emt_events)}).encode())
+            with st.lock:
+                return self._send(200, json.dumps({"teams": st.teams, "events": [e for e in st.events if e["seq"] > after],
+                                                   "last": st.last_event}).encode())
+        if u.path == "/cams":
+            return self._send(200, json.dumps({"cams": sorted(st.latest)}).encode())
         m = re.match(r"^/mjpeg/([A-Za-z0-9_.-]+)$", u.path)
         if m:
             return self._mjpeg(m.group(1))
         m = re.match(r"^/snapshot/([A-Za-z0-9_.-]+)\.jpg$", u.path)
         if m:
-            frame = latest.get(m.group(1))
-            return self._send(200, frame, "image/jpeg") if frame else self._send(404)
+            frame = st.latest.get(m.group(1))
+            return self._send(200, frame, "image/jpeg") if frame else self._err(404, "no frame yet")
+        if u.path not in PUBLIC_GET:
+            return self._err(404, "not found")
         return super().do_GET()
 
     def _mjpeg(self, cam):
-        self.send_response(200)
-        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        last = None
+        st = self.st
+        if not st.streams.acquire(blocking=False):
+            return self._err(503, "too many streams")
         try:
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            last = None
             while True:
-                with cond:
-                    cond.wait_for(lambda: latest.get(cam) is not last, timeout=10)
-                    frame = latest.get(cam)
+                with st.cond:
+                    st.cond.wait_for(lambda: st.latest.get(cam) is not last, timeout=10)
+                    frame = st.latest.get(cam)
                 if frame is None or frame is last:
                     continue
                 last = frame
                 self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(frame))
                 self.wfile.write(frame + b"\r\n")
-        except (BrokenPipeError, ConnectionResetError):
+        except OSError:  # client went away or stalled past the socket timeout
             pass
+        finally:
+            st.streams.release()
+
+
+def make_server(host: str, port: int, cfg: Config) -> ThreadingHTTPServer:
+    srv = ThreadingHTTPServer((host, port), Handler)
+    srv.daemon_threads = True
+    srv.state = State(cfg)
+    return srv
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description="MoshSpot sim bridge")
+    p.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 only behind an HTTPS proxy/load balancer")
+    p.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8780)))
+    p.add_argument("--record", action="store_true", default=os.environ.get("MOSHSPOT_RECORD") == "1",
+                   help="allow the page to save recorded runs to --runs-dir (off by default)")
+    p.add_argument("--runs-dir", type=Path, default=Path(os.environ.get("MOSHSPOT_RUNS_DIR", ROOT / "runs")))
+    p.add_argument("--insecure-no-token", action="store_true", help="allow a non-loopback host without a token")
+    a = p.parse_args(argv)
+    token = os.environ.get("MOSHSPOT_TOKEN") or None  # env only: a CLI flag would show up in `ps`
+    if token is not None and len(token) < 16:
+        sys.exit("MOSHSPOT_TOKEN must be at least 16 characters (try: openssl rand -hex 24)")
+    if a.host not in LOOPBACK and not token and not a.insecure_no_token:
+        sys.exit(f"refusing to listen on {a.host} without MOSHSPOT_TOKEN (anyone could dispatch or upload)")
+    cfg = Config(token=token, record=a.record, runs_dir=a.runs_dir)
+    print(f"MoshSpot sim on http://{a.host}:{a.port}  auth={'on' if token else 'off'}  "
+          f"record={'on -> ' + str(cfg.runs_dir) if cfg.record else 'off'}")
+    make_server(a.host, a.port, cfg).serve_forever()
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8780)))
-    a = p.parse_args()
-    print(f"MoshSpot sim on http://{a.host}:{a.port}  (MJPEG: /mjpeg/CAM-1..4, runs -> {RUNS})")
-    ThreadingHTTPServer((a.host, a.port), Handler).serve_forever()
+    main()

@@ -150,6 +150,18 @@
 <script type="module">
 import * as THREE from 'three';
 
+// ───────────────────────────── bridge auth
+// The token arrives in the URL fragment (#token=...), which browsers never send to the server or put in
+// logs/Referer. It's kept in sessionStorage for reloads and stripped from the address bar.
+const TOKEN=(()=>{
+  const m=location.hash.match(/token=([^&]+)/); let t=m?decodeURIComponent(m[1]):null;
+  try{ if(t) sessionStorage.setItem('moshspot-token',t); else t=sessionStorage.getItem('moshspot-token'); }catch{}
+  if(m) history.replaceState(null,'',location.pathname+location.search);
+  return t;
+})();
+const authHeaders=()=>TOKEN?{Authorization:`Bearer ${TOKEN}`}:{};
+const api=(path,opts={})=>fetch(path,{...opts,headers:{...(opts.headers||{}),...authHeaders()}});
+
 // ───────────────────────────── seeded RNG
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 let rand = mulberry32(7);
@@ -642,7 +654,7 @@ function emitEMT(t,status,extra={}){
   const ev={team:t.id,status,t:+simT.toFixed(2),clock:clockStr(simT),incident_id:j?.ext??null,sim_incident:j?.sim_incident??null,
     X:j?+j.X.toFixed(2):null,Y:j?+j.Y.toFixed(2):null,...extra};
   emtLog.push(ev); renderTeams();
-  if(bridge) fetch('/emt-events',{method:'POST',body:JSON.stringify(ev)}).catch(()=>{});
+  if(bridge) api('/emt-events',{method:'POST',body:JSON.stringify(ev)}).catch(()=>{});
 }
 function rankTeams(field,X,Y){ // every team's true walking time to the patient, fastest first
   return teams.map(t=>({team:t.id,status:t.status,eta_s:+etaFrom(field,t.post.X,t.post.Y).toFixed(1),straight_m:+Math.hypot(t.post.X-X,t.post.Y-Y).toFixed(1)}))
@@ -721,7 +733,8 @@ function endJob(t,act){
 }
 async function pollCommands(){
   if(!bridge) return;
-  try{ const r=await (await fetch(`/commands?after=${lastCmd}`,{cache:'no-store'})).json();
+  try{ const r=await (await api(`/commands?after=${lastCmd}`,{cache:'no-store'})).json();
+    if(!Array.isArray(r.commands)) return; // 401 etc.
     for(const c of r.commands) handleCommand(c); lastCmd=r.last; }catch{}
 }
 function renderTeams(){
@@ -815,7 +828,7 @@ function setRes(){
 
 // ───────────────────────────── capture → bridge
 const capCanvases=[0,1,2,3].map(()=>document.createElement('canvas'));
-let bridge=false, pending=0, frameIdx=0, capClock=0, recording=null;
+let bridge=false, recordAllowed=false, pending=0, frameIdx=0, capClock=0, recording=null;
 const clockStr=t=>{const s=21*3600+Math.floor(t);return [Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(v=>String(v).padStart(2,'0')).join(':');};
 function capture(run){
   if(!bridge) return;
@@ -826,7 +839,7 @@ function capture(run){
     if(osd){g.font=`${Math.round(TH/26)}px monospace`;g.fillStyle='rgba(0,0,0,.5)';g.fillRect(4,4,TH*0.62,TH/20);g.fillStyle='#e8e8e8';g.fillText(`${VENUE.cameras[i].id} ${ts}`,8,4+TH/26);}
     const q=new URLSearchParams({idx:frameIdx,t:simT.toFixed(3)}); if(run) q.set('run',run);
     pending++;
-    c.toBlob(b=>fetch(`/frame/${VENUE.cameras[i].id}?${q}`,{method:'POST',body:b}).catch(()=>{}).finally(()=>pending--),'image/jpeg',.85);
+    c.toBlob(b=>api(`/frame/${VENUE.cameras[i].id}?${q}`,{method:'POST',body:b}).catch(()=>{}).finally(()=>pending--),'image/jpeg',.85);
   }
   if(run) postFrameGT(run);
   frameIdx++;
@@ -854,7 +867,7 @@ function frameGT(){
 }
 function postFrameGT(run){
   pending++;
-  fetch(`/gt-frames?run=${run}`,{method:'POST',body:JSON.stringify(frameGT())}).catch(()=>{}).finally(()=>pending--);
+  api(`/gt-frames?run=${run}`,{method:'POST',body:JSON.stringify(frameGT())}).catch(()=>{}).finally(()=>pending--);
 }
 function buildGT(){
   const markers_px={}; for(const c of calibs){markers_px[c.id]=VENUE.markers.map(m=>{const p=project(c,m.X,m.Y,0);return inImg(c,p)?{id:m.id,u:+p[0].toFixed(2),v:+p[1].toFixed(2)}:null;}).filter(Boolean);}
@@ -872,13 +885,19 @@ function buildGT(){
 const download=(name,obj)=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(obj,null,1)],{type:'application/json'}));a.download=name;a.click();};
 
 async function checkBridge(){
-  try{const r=await fetch('/status',{cache:'no-store'}); bridge=r.ok;}catch{bridge=false;}
-  $('bridgePill').textContent=bridge?'bridge: connected':'bridge: offline'; $('bridgePill').className='pill'+(bridge?' ok':'');
-  $('outHint').innerHTML=bridge?`Live MJPEG: <code>${location.origin}/mjpeg/CAM-1</code> … <code>CAM-4</code>`:'Start <code>python3 bridge.py</code> to enable MJPEG streams and recorded runs.';
+  let locked=false;
+  try{const r=await (await api('/status',{cache:'no-store'})).json(); bridge=!!(r.ok&&r.authorized); locked=!!(r.ok&&!r.authorized); recordAllowed=!!r.record;}
+  catch{bridge=false;}
+  $('bridgePill').textContent=bridge?'bridge: connected':locked?'bridge: locked (open with #token=…)':'bridge: offline';
+  $('bridgePill').className='pill'+(bridge?' ok':locked?' rec':'');
+  const tq=TOKEN?'?token=&lt;token&gt;':'';
+  $('outHint').innerHTML=bridge?`Live MJPEG: <code>${location.origin}/mjpeg/CAM-1${tq}</code> … <code>CAM-4</code>${recordAllowed?'':' · recording off (start bridge with <code>--record</code>)'}`
+    :locked?'This bridge needs a token: open the page as <code>/#token=…</code>.':'Start <code>python3 bridge.py</code> to enable MJPEG streams and recorded runs.';
 }
 
 async function startRecording(){
-  if(!bridge){alert('Recording needs the bridge (python3 bridge.py).');return;}
+  if(!bridge){alert('Recording needs the bridge (python3 bridge.py --record).');return;}
+  if(!recordAllowed){alert('Recording is off on this bridge. Restart it with: python3 bridge.py --record');return;}
   resetAll();
   const run=`${scenario.kind}-s${seed}-${new Date().toISOString().slice(0,19).replace(/[-:T]/g,'')}`;
   const dur=isFinite(scenario.duration)?scenario.duration:120;
@@ -893,7 +912,7 @@ function recordTick(){
   $('recPill').textContent=`● REC ${recording.run} ${Math.floor(simT)}/${recording.dur}s`;
   if(simT>=recording.dur){
     const gt=buildGT();
-    fetch(`/gt?run=${recording.run}`,{method:'POST',body:JSON.stringify(gt,null,1)});
+    api(`/gt?run=${recording.run}`,{method:'POST',body:JSON.stringify(gt,null,1)});
     $('recPill').textContent=`✓ saved runs/${recording.run}`; $('recPill').className='pill ok';
     recording=null;
   }
@@ -986,7 +1005,7 @@ function loop(now){
 }
 setRes(); resetAll(); checkBridge(); setInterval(checkBridge,5000);
 // skip commands queued before this page loaded, then poll for new ones
-fetch('/commands',{cache:'no-store'}).then(r=>r.json()).then(r=>{lastCmd=r.last;setInterval(pollCommands,400);}).catch(()=>setInterval(pollCommands,400));
+api('/commands',{cache:'no-store'}).then(r=>r.json()).then(r=>{if(Number.isInteger(r.last))lastCmd=r.last;setInterval(pollCommands,400);}).catch(()=>setInterval(pollCommands,400));
 $('btnDispatch').onclick=()=>{const inc=incidents.slice().reverse().find(i=>i.should_alert&&i.t_down!=null&&i.type!=='crush_cluster'&&!i.t_evacuated);
   if(inc) handleCommand({action:'dispatch',X:inc.X,Y:inc.Y,incident_id:`manual-${inc.id}`});};
 requestAnimationFrame(loop);
