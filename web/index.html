@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MoshSpot Sim</title>
+<style>
+  :root{--bg:#0b0d12;--panel:#12151d;--line:#232836;--fg:#d8dce6;--dim:#8a91a3;--accent:#4fd1c5;--red:#ff4d5e;--amber:#ffb547;--green:#5ad17a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:8px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:15px;margin:0;letter-spacing:.04em}
+  header h1 b{color:var(--accent)}
+  .pill{padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim);font-size:12px;white-space:nowrap}
+  .pill.ok{color:var(--green);border-color:#2b5a3a}.pill.rec{color:var(--red);border-color:#6a2730}
+  #clock{font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,monospace}
+  main{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:12px;padding:12px 16px}
+  @media (max-width:1000px){main{grid-template-columns:1fr}}
+  #camwrap{position:relative;width:100%;aspect-ratio:16/9;background:#000;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  #gl{width:100%;height:100%;display:block;cursor:crosshair}
+  .tile{position:absolute;width:50%;height:50%;pointer-events:none;border:1px solid rgba(255,255,255,.06)}
+  .tile span{position:absolute;left:6px;bottom:4px;font:11px ui-monospace,Menlo,monospace;color:#cfd6e4;background:rgba(0,0,0,.55);padding:1px 5px;border-radius:3px}
+  aside{display:flex;flex-direction:column;gap:10px;min-width:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px}
+  .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 8px}
+  #map{width:100%;height:330px;display:block;cursor:crosshair;background:#0d1017;border-radius:4px}
+  .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0}
+  label{color:var(--dim);font-size:12px}
+  select,input[type=number],input[type=text]{background:#0d1017;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font:inherit}
+  input[type=number]{width:72px}
+  input[type=range]{width:110px;accent-color:var(--accent)}
+  button{background:#1b2030;color:var(--fg);border:1px solid #2c3346;border-radius:4px;padding:4px 9px;font:inherit;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:#164a46;border-color:#21706a}
+  button.danger{background:#4a1d24;border-color:#7a2a35}
+  #log{max-height:220px;overflow:auto;font:12px ui-monospace,Menlo,monospace}
+  #log div{padding:3px 0;border-bottom:1px solid #1a1e29;display:flex;gap:6px}
+  .tag{padding:0 5px;border-radius:3px;font-size:11px}
+  .t-pos{background:#4a1d24;color:#ff9aa5}.t-neg{background:#1f2a3a;color:#9fb6d8}.t-crush{background:#5a3a10;color:#ffcf87}
+  .hint{color:var(--dim);font-size:12px}
+  .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-top:6px}
+  .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+</head>
+<body>
+<header>
+  <h1><b>MoshSpot</b> Sim</h1>
+  <span id="clock" class="pill">21:00:00</span>
+  <span id="scenarioPill" class="pill">sandbox</span>
+  <span id="bridgePill" class="pill">bridge: offline</span>
+  <span id="fpsPill" class="pill">— fps</span>
+  <span id="recPill" class="pill" hidden>● REC</span>
+</header>
+<main>
+  <section>
+    <div id="camwrap">
+      <canvas id="gl"></canvas>
+      <div class="tile" style="left:0;top:0"><span id="lab0"></span></div>
+      <div class="tile" style="left:50%;top:0"><span id="lab1"></span></div>
+      <div class="tile" style="left:0;top:50%"><span id="lab2"></span></div>
+      <div class="tile" style="left:50%;top:50%"><span id="lab3"></span></div>
+    </div>
+    <p class="hint">Click a camera tile or the map to trigger the selected action on the nearest person. Cameras are fixed, like venue CCTV. These exact frames are what the bridge streams to MoshSpot.</p>
+  </section>
+  <aside>
+    <div class="card">
+      <h2>Venue map</h2>
+      <canvas id="map"></canvas>
+      <div class="legend">
+        <span><i style="background:#6b7385"></i>crowd</span><span><i style="background:#ff4d5e"></i>down</span>
+        <span><i style="background:#ffb547"></i>sit/crouch</span><span><i style="background:#4fd1c5"></i>helper</span>
+        <span><i style="background:#5ad17a"></i>EMT post</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Scenario</h2>
+      <div class="row">
+        <select id="scenario">
+          <option value="sandbox">Sandbox (manual)</option>
+          <option value="demo">Demo — 3 min story</option>
+          <option value="eval">Eval — 10 min mixed</option>
+          <option value="crush">Crush surge — 2 min</option>
+          <option value="soak">False-positive soak — 10 min</option>
+        </select>
+        <label>seed <input id="seed" type="number" value="7"></label>
+        <label>crowd <input id="crowd" type="number" value="1500" min="100" max="3000" step="100"></label>
+      </div>
+      <div class="row">
+        <button id="btnReset" class="primary">Reset / start</button>
+        <button id="btnPause">Pause</button>
+        <select id="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select>
+      </div>
+      <div class="row">
+        <label>click →</label>
+        <select id="clickAction">
+          <option value="collapse">Collapse (stays down)</option>
+          <option value="collapse_recover">Collapse, gets up</option>
+          <option value="lie_down">Slow lie-down</option>
+          <option value="sit">Sit down</option>
+          <option value="crouch">Crouch &amp; recover</option>
+        </select>
+        <button id="btnRandom" class="danger">Random collapse</button>
+        <button id="btnSurge">Crush surge</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Conditions</h2>
+      <div class="row"><label>house lights</label><input id="house" type="range" min="0" max="1" step="0.01" value="0.35">
+        <label>haze</label><input id="haze" type="range" min="0" max="0.04" step="0.001" value="0.012"></div>
+      <div class="row"><label><input id="strobe" type="checkbox"> strobe</label>
+        <label><input id="osd" type="checkbox" checked> CCTV timestamp</label>
+        <label><input id="calib" type="checkbox"> calibration view (hide crowd)</label></div>
+    </div>
+    <div class="card">
+      <h2>Output to MoshSpot</h2>
+      <div class="row">
+        <label>tile</label><select id="res"><option value="640x360">640×360</option><option value="960x540">960×540</option><option value="1280x720" selected>1280×720</option></select>
+        <label>fps</label><input id="fps" type="number" value="5" min="1" max="30">
+        <label><input id="stream" type="checkbox" checked> live stream</label>
+      </div>
+      <div class="row">
+        <button id="btnRecord" class="primary">Record run</button>
+        <button id="btnGT">Download GT</button>
+        <button id="btnVenue">Download venue JSON</button>
+      </div>
+      <div id="outHint" class="hint">Start <code>python3 bridge.py</code> to enable MJPEG streams and recorded runs.</div>
+    </div>
+    <div class="card">
+      <h2>EMT teams</h2>
+      <div id="teams" style="font-size:12px;line-height:1.7"></div>
+      <div class="row">
+        <label>accept</label>
+        <select id="ackMode">
+          <option value="auto5">auto after 5 s</option><option value="auto2">auto after 2 s</option><option value="auto15">auto after 15 s</option>
+          <option value="api">on MoshSpot "accept"</option><option value="never">never (test escalation)</option>
+        </select>
+        <label><input id="autoResolve" type="checkbox" checked> resolve 40 s on scene</label>
+      </div>
+      <div class="row"><button id="btnDispatch">Dispatch nearest team to latest incident</button></div>
+      <div class="hint">MoshSpot drives this with <code>POST /dispatch</code>; read team status from <code>GET /emt</code>.</div>
+    </div>
+    <div class="card">
+      <h2>Ground-truth incidents</h2>
+      <div id="log"></div>
+    </div>
+  </aside>
+</main>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ───────────────────────────── seeded RNG
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+let rand = mulberry32(7);
+const rr = (a,b)=>a+(b-a)*rand();
+const pick = arr=>arr[Math.floor(rand()*arr.length)];
+
+// ───────────────────────────── venue (venue frame: X right facing stage, Y toward stage, Z up; metres)
+const VENUE = {
+  name:'MoshSpot Demo Arena',
+  bounds:{xmin:-30,xmax:30,ymin:0,ymax:48.2},
+  stage:{xmin:-14,xmax:14,ymin:50,ymax:60,height:1.8},
+  barricade_y:48.8,
+  zones:[
+    {id:'PIT-L',name:'Pit Left',poly:[[-30,34],[0,34],[0,48.5],[-30,48.5]]},
+    {id:'PIT-R',name:'Pit Right',poly:[[0,34],[30,34],[30,48.5],[0,48.5]]},
+    {id:'GA-MID',name:'GA Middle',poly:[[-30,17],[30,17],[30,34],[-30,34]]},
+    {id:'GA-BACK',name:'GA Back',poly:[[-30,0],[30,0],[30,17],[-30,17]]},
+  ],
+  obstacles:[{id:'FOH',name:'Front-of-house mix tent',xmin:-4,xmax:4,ymin:13,ymax:19}],
+  emt_posts:[
+    {id:'EMT-1',name:'Stage-left pit',X:-28.5,Y:47.5},
+    {id:'EMT-2',name:'Stage-right pit',X:28.5,Y:47.5},
+    {id:'EMT-3',name:'FOH',X:0,Y:11.5},
+    {id:'EMT-4',name:'Back-left gate',X:-28.5,Y:1.5},
+  ],
+  cameras:[
+    {id:'CAM-1',name:'SL truss',pos:[-12.5,50.6,9.5],look:[-6,36,0],fov:58},
+    {id:'CAM-2',name:'SR truss',pos:[12.5,50.6,9.5],look:[6,36,0],fov:58},
+    {id:'CAM-3',name:'FOH tower',pos:[0,16,7.5],look:[0,33,0],fov:62},
+    {id:'CAM-4',name:'Delay tower',pos:[-27,3,8],look:[-4,21,0],fov:60},
+  ],
+  markers:[[-29,4],[29,4],[-29,26],[29,26],[-29,46],[29,46],[-10,48],[10,48],[-6,12],[6,12]].map((p,i)=>({id:i,X:p[0],Y:p[1],size:0.8})),
+};
+const v2t = (X,Y,Z=0)=>new THREE.Vector3(X,Z,-Y);
+
+function zoneOf(X,Y){
+  for(const z of VENUE.zones){ if(pointInPoly(X,Y,z.poly)) return z.id; }
+  return null;
+}
+function pointInPoly(x,y,p){let c=false;for(let i=0,j=p.length-1;i<p.length;j=i++){const [xi,yi]=p[i],[xj,yj]=p[j];if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))c=!c;}return c;}
+function nearestEMT(X,Y){let best=null;for(const e of VENUE.emt_posts){const d=Math.hypot(e.X-X,e.Y-Y);if(!best||d<best.dist)best={id:e.id,dist:+d.toFixed(1)};}return best;}
+
+// ───────────────────────────── poses
+const mk = o=>Object.assign({py:.95,pitch:0,roll:0,shPL:.05,shPR:.05,shRL:.1,shRR:.1,elL:.25,elR:.25,hipL:0,hipR:0,kneeL:.05,kneeR:.05,nod:0},o);
+const PKEYS = Object.keys(mk({}));
+const POSES = {
+  upright: mk({}),
+  armsUp:  mk({shPL:-2.7,shPR:-2.7,shRL:.35,shRR:.35,elL:.3,elR:.3}),
+  crouch:  mk({py:.5,pitch:.55,shPL:-.7,shPR:-.7,shRL:.15,shRR:.15,elL:.9,elR:.9,hipL:-1.95,hipR:-1.95,kneeL:1.75,kneeR:1.75,nod:.2}),
+  sit:     mk({py:.14,pitch:-.15,shPL:-.5,shPR:-.5,elL:.6,elR:.6,hipL:-1.85,hipR:-1.85,kneeL:1.4,kneeR:1.4}),
+  buckle:  mk({py:.55,pitch:.25,shPL:-.4,shPR:-.2,shRL:.4,shRR:.4,elL:.4,elR:.4,hipL:-1.0,hipR:-1.1,kneeL:1.6,kneeR:1.7,nod:.4}),
+  lieBack: mk({py:.12,pitch:-1.5,shPL:-.1,shPR:.1,shRL:.45,shRR:.3,elL:.2,elR:.5,hipL:.05,hipR:-.1,kneeL:.1,kneeR:.3,nod:-.1}),
+  lieFront:mk({py:.14,pitch:1.5,shPL:-.3,shPR:.2,shRL:.6,shRR:.4,elL:.6,elR:.3,hipL:.1,hipR:0,kneeL:.2,kneeR:.05,nod:.3}),
+  lieSide: mk({py:.2,pitch:0,roll:1.45,shPL:-1.1,shPR:-.6,shRL:.1,shRR:.1,elL:1.2,elR:.6,hipL:-.7,hipR:-.3,kneeL:1.0,kneeR:.5}),
+};
+const copyPose = (p,out={})=>{for(const k of PKEYS)out[k]=p[k];return out;};
+const smooth = t=>t*t*(3-2*t);
+function lerpPose(a,b,t,out){for(const k of PKEYS)out[k]=a[k]+(b[k]-a[k])*t;return out;}
+
+function makeAnim(a, seq, done, ease=smooth){
+  // seq: [[segmentSeconds, pose], ...] starting from the agent's current pose
+  const keys=[{t:0,p:copyPose(a.pose)}]; let t=0;
+  for(const [d,p] of seq){t+=d;keys.push({t,p});}
+  a.anim={keys,t:0,dur:t,done,ease};
+}
+function evalAnim(an,out){
+  const t=Math.min(an.t,an.dur), k=an.keys;
+  let i=1; while(i<k.length-1 && k[i].t<t) i++;
+  const a=k[i-1], b=k[i]; const u=b.t>a.t?(t-a.t)/(b.t-a.t):1;
+  return lerpPose(a.p,b.p,an.ease(Math.max(0,Math.min(1,u))),out);
+}
+
+// ───────────────────────────── three.js scene
+const gl = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({canvas:gl, antialias:true, preserveDrawingBuffer:true});
+renderer.setPixelRatio(1);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07080c);
+scene.fog = new THREE.FogExp2(0x0c0d14, 0.012);
+
+const ambient = new THREE.AmbientLight(0xb8c0ff, 0.3); scene.add(ambient);
+const hemi = new THREE.HemisphereLight(0x8090c0, 0x201810, 0.25); scene.add(hemi);
+const wash = new THREE.DirectionalLight(0xfff2dd, 0.5); wash.position.copy(v2t(0,70,14)); wash.target.position.copy(v2t(0,20,0)); scene.add(wash, wash.target);
+const spots=[];
+[[0xff2bd6,-10],[0x2bd9ff,-3],[0xffb23b,4],[0x6a5bff,11]].forEach(([c,x],i)=>{
+  const s=new THREE.SpotLight(c, 2.2, 0, 0.32, 0.6, 0); s.position.copy(v2t(x,56,11));
+  scene.add(s, s.target); spots.push(s);
+});
+
+function box(w,d,h,color,X,Y,Z=0,opts={}){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshLambertMaterial({color,...opts}));
+  m.position.copy(v2t(X,Y,Z+h/2)); scene.add(m); return m;
+}
+// floor
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(90,90), new THREE.MeshLambertMaterial({color:0x2a2c33}));
+floor.rotation.x=-Math.PI/2; floor.position.copy(v2t(0,28,0)); scene.add(floor);
+const grid=new THREE.GridHelper(90,45,0x34384a,0x2c3040); grid.position.copy(v2t(0,28,0.005)); scene.add(grid);
+// stage, screen, trusses, speakers, barricade, FOH, towers, fences
+const S=VENUE.stage;
+box(S.xmax-S.xmin, S.ymax-S.ymin, S.height, 0x1a1a22, 0, (S.ymin+S.ymax)/2);
+const screenMat=new THREE.MeshBasicMaterial({color:0x3344aa});
+const screen=new THREE.Mesh(new THREE.PlaneGeometry(22,8), screenMat); screen.position.copy(v2t(0,59.5,7)); scene.add(screen);
+for(const x of [-15,15]){ box(.5,.5,12,0x555a66,x,51.5); box(4,3,5,0x15151a,x*1.32,50.2,0); }
+box(31,.5,.5,0x555a66,0,51,11.5);
+for(let x=-29;x<=29;x+=2) box(1.9,.15,1.15,0x9aa0aa,x,VENUE.barricade_y);
+const O=VENUE.obstacles[0];
+box(O.xmax-O.xmin,O.ymax-O.ymin,2.6,0x2a2f3a,(O.xmin+O.xmax)/2,(O.ymin+O.ymax)/2);
+box(O.xmax-O.xmin+1,O.ymax-O.ymin+1,.15,0xd8d8e0,(O.xmin+O.xmax)/2,(O.ymin+O.ymax)/2,2.7);
+for(const c of VENUE.cameras){ if(c.pos[1]<45) box(.4,.4,c.pos[2],0x666b78,c.pos[0],c.pos[1]-0.3); }
+for(const x of [-30.6,30.6]) box(.15,50,1.2,0x50545e,x,24.5);
+box(61,.15,1.2,0x50545e,0,-0.6);
+for(const e of VENUE.emt_posts){ box(1.6,1.6,.05,0x1f7a3a,e.X,e.Y); box(.25,.25,2.2,0x2fbf5a,e.X+.9,e.Y); }
+// floor calibration markers: checkerboard tile with an ID number (corners give clean keypoints)
+for(const mk of VENUE.markers){
+  const c=document.createElement('canvas'); c.width=c.height=128; const g=c.getContext('2d');
+  g.fillStyle='#fff'; g.fillRect(0,0,128,128); g.fillStyle='#000'; g.fillRect(8,8,112,112);
+  g.fillStyle='#fff'; g.fillRect(16,16,48,48); g.fillRect(64,64,48,48);
+  g.fillStyle='#000'; g.font='bold 40px sans-serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillText(mk.id,40,40);
+  g.fillStyle='#fff'; g.fillText(mk.id,88,88);
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(mk.size,mk.size), new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(c)}));
+  m.rotation.x=-Math.PI/2; m.position.copy(v2t(mk.X,mk.Y,0.01)); scene.add(m);
+}
+
+// ───────────────────────────── crowd geometry (10 instanced meshes = 10 draw calls for any crowd size)
+const MAX=3008; // crowd ≤ 3000 + 8 EMTs
+const lam = new THREE.MeshLambertMaterial({color:0xffffff});
+function cap(r,len,sx=1,sz=1){const g=new THREE.CapsuleGeometry(r,len,3,8);g.translate(0,-(len/2+r),0);g.scale(sx,1,sz);return g;}
+const torsoG=new THREE.CapsuleGeometry(.17,.36,3,10); torsoG.translate(0,.30,0); torsoG.scale(1.12,1,.65);
+const headG=new THREE.SphereGeometry(.115,10,8); headG.translate(0,.10,0);
+const PARTS={
+  torso:new THREE.InstancedMesh(torsoG,lam,MAX), head:new THREE.InstancedMesh(headG,lam,MAX),
+  uaL:new THREE.InstancedMesh(cap(.055,.21),lam,MAX), uaR:new THREE.InstancedMesh(cap(.055,.21),lam,MAX),
+  faL:new THREE.InstancedMesh(cap(.045,.2),lam,MAX), faR:new THREE.InstancedMesh(cap(.045,.2),lam,MAX),
+  thL:new THREE.InstancedMesh(cap(.075,.31),lam,MAX), thR:new THREE.InstancedMesh(cap(.075,.31),lam,MAX),
+  shL:new THREE.InstancedMesh(cap(.06,.34),lam,MAX), shR:new THREE.InstancedMesh(cap(.06,.34),lam,MAX),
+};
+for(const m of Object.values(PARTS)){ m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.frustumCulled=false; scene.add(m); }
+
+// body dimensions (local frame at pelvis: +y up the spine, +z forward, +x = person's left)
+const STAND_H=1.865; // pelvis .95 + neck .70 + head top .215, at scale 1
+const B={shX:.22,shY:.58,ua:.30,fa:.27,hipX:.10,hipY:0,th:.45,sh:.46,neck:.70};
+const _root=new THREE.Matrix4(), _t=new THREE.Matrix4(), _j=new THREE.Matrix4(), _j2=new THREE.Matrix4(), _h=new THREE.Matrix4();
+const _v=new THREE.Vector3();
+
+function rootMatrix(a,P,jump){
+  const th=Math.atan2(Math.cos(a.h),-Math.sin(a.h));
+  _root.makeTranslation(a.x, P.py*a.s+jump, -a.y);
+  _root.multiply(_t.makeRotationY(th)).multiply(_t.makeRotationX(P.pitch)).multiply(_t.makeRotationZ(P.roll)).multiply(_t.makeScale(a.s,a.s,a.s));
+}
+// forward kinematics; writes instance matrices (i>=0) and/or COCO-17 keypoints (venue coords)
+function fk(a,P,jump,i,kps){
+  rootMatrix(a,P,jump);
+  if(i>=0) PARTS.torso.setMatrixAt(i,_root);
+  _h.copy(_root).multiply(_t.makeTranslation(0,B.neck,0)).multiply(_t.makeRotationX(P.nod));
+  if(i>=0) PARTS.head.setMatrixAt(i,_h);
+  if(kps){
+    const hp=[[0,.10,.11],[.035,.13,.095],[-.035,.13,.095],[.105,.10,0],[-.105,.10,0]];
+    hp.forEach((p,k)=>kps[k]=venue(_v.set(...p).applyMatrix4(_h)));
+  }
+  const limb=(m1,m2,side,jx,jy,pitch,roll,bend,l1,l2,k1,k2,k3)=>{
+    _j.copy(_root).multiply(_t.makeTranslation(side*jx,jy,0)).multiply(_t.makeRotationZ(side*roll)).multiply(_t.makeRotationX(pitch));
+    if(i>=0) m1.setMatrixAt(i,_j);
+    _j2.copy(_j).multiply(_t.makeTranslation(0,-l1,0)).multiply(_t.makeRotationX(bend));
+    if(i>=0) m2.setMatrixAt(i,_j2);
+    if(kps){
+      kps[k1]=venue(_v.set(0,0,0).applyMatrix4(_j));
+      kps[k2]=venue(_v.set(0,0,0).applyMatrix4(_j2));
+      kps[k3]=venue(_v.set(0,-l2,0).applyMatrix4(_j2));
+    }
+  };
+  limb(PARTS.uaL,PARTS.faL, 1,B.shX,B.shY,P.shPL,P.shRL,-P.elL,B.ua,B.fa,5,7,9);
+  limb(PARTS.uaR,PARTS.faR,-1,B.shX,B.shY,P.shPR,P.shRR,-P.elR,B.ua,B.fa,6,8,10);
+  limb(PARTS.thL,PARTS.shL, 1,B.hipX,B.hipY,P.hipL,.04,P.kneeL,B.th,B.sh,11,13,15);
+  limb(PARTS.thR,PARTS.shR,-1,B.hipX,B.hipY,P.hipR,.04,P.kneeR,B.th,B.sh,12,14,16);
+}
+const venue = v=>[+v.x.toFixed(3), +(-v.z).toFixed(3), +v.y.toFixed(3)];
+
+// ───────────────────────────── cameras + OpenCV-convention calibration
+let TW=1280, TH=720;
+const cams = VENUE.cameras.map(c=>{
+  const cam=new THREE.PerspectiveCamera(c.fov,16/9,0.5,220);
+  cam.position.copy(v2t(...c.pos)); cam.lookAt(v2t(...c.look)); cam.updateMatrixWorld(); return cam;
+});
+let calibs=[];
+function computeCalib(){
+  const M=new THREE.Matrix4().set(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1); // venue → three
+  const D=new THREE.Matrix4().makeScale(1,-1,-1);                      // three camera → OpenCV camera
+  calibs = VENUE.cameras.map((c,i)=>{
+    const cam=cams[i]; cam.updateMatrixWorld();
+    const E=D.clone().multiply(cam.matrixWorldInverse).multiply(M), e=E.elements;
+    const R=[[e[0],e[4],e[8]],[e[1],e[5],e[9]],[e[2],e[6],e[10]]], t=[e[12],e[13],e[14]];
+    const fy=(TH/2)/Math.tan(THREE.MathUtils.degToRad(c.fov)/2), fx=fy, cx=TW/2, cy=TH/2;
+    const K=[[fx,0,cx],[0,fy,cy],[0,0,1]];
+    const Hm=[0,1,2].map(r=>[K[r][0]*R[0][0]+K[r][1]*R[1][0]+K[r][2]*R[2][0], K[r][0]*R[0][1]+K[r][1]*R[1][1]+K[r][2]*R[2][1], K[r][0]*t[0]+K[r][1]*t[1]+K[r][2]*t[2]]);
+    const n=Hm[2][2]; const Hf=Hm.map(r=>r.map(v=>v/n));
+    return {id:c.id,name:c.name,width:TW,height:TH,fov_deg:c.fov,K,dist:[0,0,0,0,0],R,t,H_floor_to_image:Hf,position:c.pos,fx,fy,cx,cy};
+  });
+}
+function project(c,X,Y,Z){
+  const R=c.R,t=c.t;
+  const x=R[0][0]*X+R[0][1]*Y+R[0][2]*Z+t[0], y=R[1][0]*X+R[1][1]*Y+R[1][2]*Z+t[1], z=R[2][0]*X+R[2][1]*Y+R[2][2]*Z+t[2];
+  if(z<0.3) return null;
+  return [c.fx*x/z+c.cx, c.fy*y/z+c.cy, z];
+}
+const inImg=(c,p)=>p && p[0]>=0 && p[0]<c.width && p[1]>=0 && p[1]<c.height;
+function footprint(c){ // ground polygon seen by a camera (for the map)
+  const Rt=[[c.R[0][0],c.R[1][0],c.R[2][0]],[c.R[0][1],c.R[1][1],c.R[2][1]],[c.R[0][2],c.R[1][2],c.R[2][2]]];
+  const C=[0,1,2].map(r=>-(Rt[r][0]*c.t[0]+Rt[r][1]*c.t[1]+Rt[r][2]*c.t[2]));
+  // walk the image border; keep rays that hit the floor within 60 m
+  const pts=[], W=c.width, H=c.height, n=12, border=[];
+  for(let k=0;k<n;k++) border.push([W*k/n,H]); for(let k=0;k<n;k++) border.push([W,H*(1-k/n)]);
+  for(let k=0;k<n;k++) border.push([W*(1-k/n),0]); for(let k=0;k<n;k++) border.push([0,H*k/n]);
+  for(const [u,v] of border){
+    const d0=[(u-c.cx)/c.fx,(v-c.cy)/c.fy,1]; const d=[0,1,2].map(r=>Rt[r][0]*d0[0]+Rt[r][1]*d0[1]+Rt[r][2]*d0[2]);
+    if(d[2]>=-1e-3) continue;
+    const s=-C[2]/d[2]; if(s*Math.hypot(d[0],d[1])>60) continue;
+    pts.push([C[0]+s*d[0],C[1]+s*d[1]]);
+  }
+  return {C,pts};
+}
+
+// ───────────────────────────── agents
+const SHIRTS=[0x111111,0x151515,0x1c1c1c,0x222244,0x2b2b2b,0x7a1e1e,0xd8d8d8,0x1e5a8a,0x2f6b2f,0xc9a227,0x8a2be2,0xe36414,0x0e7c7b,0xf2f2f2,0x333333];
+const PANTS=[0x1b2a4a,0x111111,0x2b2b2b,0x3a3a3a,0x4a5a7a,0x6b5a45];
+const SKIN=[0x8d5524,0xc68642,0xe0ac69,0xf1c27d,0xffdbac,0x5c3a21,0xa66a3f];
+let A=[], N=0, crowdN=0, simT=0, timers=[], incidents=[], incSeq=0, clusterSeq=0, surge=null;
+let scenario={kind:'sandbox',duration:Infinity,events:[]}, evPtr=0;
+
+function densityAt(X,Y){
+  const front=Math.exp(-(48-Y)/9), side=Math.abs(X)<24?1:0.45;
+  return 0.12+0.88*front*side + (Y<17?0.15:0);
+}
+function insideObstacle(X,Y,m=0){for(const o of VENUE.obstacles) if(X>o.xmin-m&&X<o.xmax+m&&Y>o.ymin-m&&Y<o.ymax+m) return o; return null;}
+function sampleHome(){
+  for(let k=0;k<200;k++){
+    const X=rr(-29.3,29.3), Y=rr(0.6,48);
+    if(insideObstacle(X,Y,1)) continue;
+    if(rand()<densityAt(X,Y)) return [X,Y];
+  }
+  return [rr(-25,25),rr(20,45)];
+}
+function resetCrowd(n){
+  A=[]; N=n; crowdN=n;
+  for(let i=0;i<n;i++){
+    const [x,y]=sampleHome();
+    const walker=rand()<0.06;
+    A.push({id:i,x,y,hx:x,hy:y,vx:0,vy:0,h:Math.PI/2+rr(-.5,.5),faceOff:rr(-.45,.45),s:rr(.9,1.1),ph:rr(0,100),
+      energy:y>34?rr(.55,1):y>17?rr(.2,.6):rr(0,.3), arms:0, mode:walker?'walk':'idle', wx:x,wy:y,
+      fixed:false, posture:'upright', anim:null, pose:copyPose(POSES.upright), wave:false, helper:null, inc:null});
+  }
+  const shirt=new THREE.Color(), skin=new THREE.Color(), pants=new THREE.Color();
+  for(const a of A){
+    shirt.setHex(pick(SHIRTS)); skin.setHex(pick(SKIN)); pants.setHex(pick(PANTS));
+    const sleeve=rand()<.5?shirt:skin;
+    PARTS.torso.setColorAt(a.id,shirt); PARTS.head.setColorAt(a.id,skin);
+    PARTS.uaL.setColorAt(a.id,sleeve); PARTS.uaR.setColorAt(a.id,sleeve);
+    PARTS.faL.setColorAt(a.id,skin); PARTS.faR.setColorAt(a.id,skin);
+    for(const k of ['thL','thR','shL','shR']) PARTS[k].setColorAt(a.id,pants);
+  }
+  spawnTeams(); N=A.length;
+  for(const m of Object.values(PARTS)){ m.count=N; m.instanceColor.needsUpdate=true; }
+}
+
+// spatial hash (1 m cells)
+const GW=64, GH=52, cellHead=new Int32Array(GW*GH); let nextIdx=new Int32Array(MAX);
+const cellOf=(x,y)=>Math.max(0,Math.min(GW-1,Math.floor(x+32)))+Math.max(0,Math.min(GH-1,Math.floor(y+1)))*GW;
+function buildGrid(){cellHead.fill(-1);for(let i=0;i<N;i++){const c=cellOf(A[i].x,A[i].y);nextIdx[i]=cellHead[c];cellHead[c]=i;}}
+function neighbours(x,y,r,fn){
+  const x0=Math.floor(x-r+32),x1=Math.floor(x+r+32),y0=Math.floor(y-r+1),y1=Math.floor(y+r+1);
+  for(let cy=Math.max(0,y0);cy<=Math.min(GH-1,y1);cy++)for(let cx=Math.max(0,x0);cx<=Math.min(GW-1,x1);cx++)
+    for(let j=cellHead[cx+cy*GW];j!==-1;j=nextIdx[j]) fn(A[j]);
+}
+const angLerp=(a,b,t)=>{let d=((b-a+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;return a+d*t;};
+
+function step(dt){
+  simT+=dt;
+  while(evPtr<scenario.events.length && scenario.events[evPtr].t<=simT) runEvent(scenario.events[evPtr++]);
+  for(let i=timers.length-1;i>=0;i--) if(timers[i].t<=simT){const f=timers[i].fn;timers.splice(i,1);f();}
+  buildGrid();
+  const crush = surge && simT<surge.until;
+  const prog = crush ? Math.min(1,(simT-surge.t0)/12) : 0;
+  const R = crush ? .58-.22*prog : .58;
+  for(const a of A){
+    if(a.anim){a.anim.t+=dt; if(a.anim.t>=a.anim.dur && a.anim.done){const f=a.anim.done;a.anim.done=null;f();}}
+    if(a.fixed){a.vx=a.vy=0;continue;}
+    let tx,ty,maxV=.7;
+    const pusher=!!a.emt||a.mode==='escort';
+    if(pusher){
+      if(a.mode==='escort'){ const L=a.escortBy; tx=L.x-.6*Math.cos(L.h); ty=L.y-.6*Math.sin(L.h); maxV=1.6;
+        if(a.escortTeam.status==='available'){ a.hidden=true; a.fixed=true; if(a.inc) a.inc.t_evacuated=+simT.toFixed(2); renderLog(); continue; } }
+      else if(a.path.length){ [tx,ty]=a.path[0]; maxV=1.5;
+        if(Math.hypot(tx-a.x,ty-a.y)<(a.path.length>1?.8:.3)){ a.path.shift(); if(!a.path.length){ const f=a.onArrive; a.onArrive=null; a.vx=a.vy=0; f?.(); continue; } } }
+      else { tx=a.hx; ty=a.hy; maxV=1.0; }
+    }else if(a.mode==='walk'){
+      if(Math.hypot(a.wx-a.x,a.wy-a.y)<1){[a.wx,a.wy]=sampleHome();}
+      tx=a.wx;ty=a.wy;maxV=1.25;
+    }else if(a.mode==='help'){
+      tx=a.wx;ty=a.wy;maxV=1.1;
+      if(Math.hypot(tx-a.x,ty-a.y)<.3){a.fixed=true;a.posture='crouching';makeAnim(a,[[1.0,POSES.crouch]]);continue;}
+    }else{
+      tx=a.hx+.35*Math.sin(simT*.31+a.ph); ty=a.hy+.35*Math.cos(simT*.23+a.ph*1.3);
+      if(crush && a.hy>30){ tx+= (surge.cx-tx)*.35*prog; ty=Math.min(48.1, ty+5*prog); maxV=1.0; }
+    }
+    let dvx=(tx-a.x)*.9, dvy=(ty-a.y)*.9; const dv=Math.hypot(dvx,dvy); if(dv>maxV){dvx*=maxV/dv;dvy*=maxV/dv;}
+    let sx=0,sy=0;
+    neighbours(a.x,a.y,1.1,b=>{
+      if(b===a||b.hidden) return;
+      if(pusher && !b.emt) return; // EMTs push through; the crowd yields to them
+      const dx=a.x-b.x, dy=a.y-b.y, d2=dx*dx+dy*dy;
+      const rad = b.emt||b.mode==='escort' ? .95 : b.posture==='lying' ? (crush?.5:1.05) : R;
+      if(d2<rad*rad && d2>1e-6){const d=Math.sqrt(d2), f=(rad-d)/d; sx+=dx*f; sy+=dy*f;}
+    });
+    dvx+=sx*3.2; dvy+=sy*3.2;
+    const k=Math.min(1,dt*4); a.vx+=(dvx-a.vx)*k; a.vy+=(dvy-a.vy)*k;
+    a.x+=a.vx*dt; a.y+=a.vy*dt;
+    const b=VENUE.bounds; a.x=Math.max(b.xmin+.3,Math.min(b.xmax-.3,a.x)); a.y=Math.max(b.ymin+.3,Math.min(b.ymax,a.y));
+    const o=insideObstacle(a.x,a.y,.3);
+    if(o){const cx=(o.xmin+o.xmax)/2,cy=(o.ymin+o.ymax)/2,ex=(o.xmax-o.xmin)/2+.3,ey=(o.ymax-o.ymin)/2+.3,ux=(a.x-cx)/ex,uy=(a.y-cy)/ey;
+      if(Math.abs(ux)>Math.abs(uy)) a.x=cx+Math.sign(ux)*ex; else a.y=cy+Math.sign(uy)*ey;}
+    const sp=Math.hypot(a.vx,a.vy);
+    const want = a.mode==='help' || sp>.35 ? Math.atan2(a.vy,a.vx) : Math.PI/2+a.faceOff;
+    a.h=angLerp(a.h,want,Math.min(1,dt*3));
+    a.ph+=dt*sp*5.5;
+  }
+}
+
+// ───────────────────────────── incidents (ground truth)
+function newIncident(a,type,extra={}){
+  const inc={id:`INC-${String(++incSeq).padStart(3,'0')}`,type,agent_id:a.id,
+    should_alert:['collapse','lie_down','crush_collapse'].includes(type),
+    expected_priority:{collapse:'HIGH',crush_collapse:'HIGH',lie_down:'MEDIUM'}[type]||null,
+    t_onset:+simT.toFixed(2),t_down:null,t_recover:null,X:+a.x.toFixed(2),Y:+a.y.toFixed(2),zone:zoneOf(a.x,a.y),
+    nearest_emt:nearestEMT(a.x,a.y),visible_in:[],px:{},helpers:0,cluster:null,...extra};
+  incidents.push(inc); a.inc=inc; renderLog(); return inc;
+}
+function markVisibility(inc,a){
+  inc.visible_in=[]; inc.px={};
+  for(const c of calibs){const p=project(c,a.x,a.y,.15); if(inImg(c,p)){inc.visible_in.push(c.id); inc.px[c.id]=[+p[0].toFixed(1),+p[1].toFixed(1)];}}
+}
+const lieVariants=()=>{const v=pick(['lieBack','lieBack','lieFront','lieSide']);const p=copyPose(POSES[v]);if(v==='lieSide'&&rand()<.5)p.roll*=-1;return p;};
+
+function doCollapse(a,type='collapse',extra={}){
+  if(!a||a.fixed) return null;
+  const inc=newIncident(a,type,extra);
+  a.fixed=true; a.mode='idle'; a.posture='falling'; a.wave=false;
+  const dur=rr(.9,1.4), end=lieVariants();
+  makeAnim(a,[[dur*.45,POSES.buckle],[dur*.55,end]],()=>{
+    a.posture='lying'; inc.t_down=+simT.toFixed(2); markVisibility(inc,a); renderLog();
+    if(type==='collapse_recover'){
+      const stir=copyPose(end); stir.shPL-=.8; stir.elL+=.8; stir.nod+=.3;
+      timers.push({t:simT+rr(2,3),fn:()=>makeAnim(a,[[.8,stir],[.8,end]])});
+      timers.push({t:simT+rr(5,6.5),fn:()=>{a.posture='sitting';makeAnim(a,[[2,POSES.sit],[1.4,POSES.crouch],[1.2,POSES.upright]],()=>{
+        a.posture='upright';a.fixed=false;a.anim=null;inc.t_recover=+simT.toFixed(2);renderLog();});}});
+    }
+    if(type!=='crush_collapse') timers.push({t:simT+rr(3,9),fn:()=>recruitHelpers(a,inc,type==='collapse_recover'?rr(3,5):null)});
+  },t=>t*t); // ease-in: gravity
+  return inc;
+}
+function recruitHelpers(a,inc,releaseAfter){
+  if(a.posture!=='lying') return;
+  const cand=[]; neighbours(a.x,a.y,3.5,b=>{if(b!==a&&!b.fixed&&b.mode==='idle'&&!b.inc)cand.push([Math.hypot(b.x-a.x,b.y-a.y),b]);});
+  cand.sort((p,q)=>p[0]-q[0]);
+  const helpers=cand.slice(0,Math.floor(rr(2,5))).map(p=>p[1]);
+  helpers.forEach((b,k)=>{
+    const ang=k*2*Math.PI/helpers.length+rr(-.3,.3);
+    b.mode='help'; b.helper=inc.id; b.wx=a.x+.95*Math.cos(ang); b.wy=a.y+.95*Math.sin(ang); b.wave=k===0;
+  });
+  inc.helpers=helpers.length; inc.helper_ids=helpers.map(b=>b.id); renderLog();
+  if(releaseAfter) timers.push({t:simT+releaseAfter+6,fn:()=>helpers.forEach(releaseHelper)});
+}
+function releaseHelper(b){
+  b.wave=false; b.helper=null; b.posture='upright';
+  makeAnim(b,[[1,POSES.upright]],()=>{b.fixed=false;b.mode='idle';b.anim=null;b.hx=b.x;b.hy=b.y;});
+}
+function doSit(a){
+  if(!a||a.fixed) return;
+  const inc=newIncident(a,'sit'); a.fixed=true; a.mode='idle'; a.posture='sitting';
+  makeAnim(a,[[1.2,POSES.crouch],[1.6,POSES.sit]],()=>{inc.t_down=+simT.toFixed(2);markVisibility(inc,a);renderLog();
+    timers.push({t:simT+rr(60,180),fn:()=>makeAnim(a,[[1.4,POSES.crouch],[1.2,POSES.upright]],()=>{a.fixed=false;a.anim=null;a.posture='upright';inc.t_recover=+simT.toFixed(2);renderLog();})});});
+}
+function doCrouch(a){
+  if(!a||a.fixed) return;
+  const inc=newIncident(a,'crouch'); a.fixed=true; a.mode='idle'; a.posture='crouching';
+  makeAnim(a,[[1.0,POSES.crouch]],()=>{inc.t_down=+simT.toFixed(2);markVisibility(inc,a);renderLog();
+    timers.push({t:simT+rr(4,12),fn:()=>makeAnim(a,[[1.0,POSES.upright]],()=>{a.fixed=false;a.anim=null;a.posture='upright';inc.t_recover=+simT.toFixed(2);renderLog();})});});
+}
+function doLieDown(a){
+  if(!a||a.fixed) return;
+  const inc=newIncident(a,'lie_down'); a.fixed=true; a.mode='idle'; a.posture='sitting';
+  makeAnim(a,[[1.5,POSES.crouch],[2.0,POSES.sit],[2.5,POSES.lieBack]],()=>{a.posture='lying';inc.t_down=+simT.toFixed(2);markVisibility(inc,a);renderLog();});
+}
+function doSurge(){
+  const cx=rr(-12,12), cy=46.5;
+  surge={t0:simT,until:simT+45,cx,cy};
+  const cl={id:`CL-${++clusterSeq}`,t_onset:+simT.toFixed(2),X:+cx.toFixed(2),Y:cy,members:[]};
+  const n=Math.floor(rr(3,6));
+  for(let k=0;k<n;k++) timers.push({t:simT+16+k*rr(3,5),fn:()=>{
+    const a=pickAgent({near:[cx,cy],radius:3.5});
+    const inc=doCollapse(a,'crush_collapse',{cluster:cl.id}); if(inc) cl.members.push(inc.id);
+  }});
+  incidents.push({id:cl.id,type:'crush_cluster',should_alert:true,expected_priority:'HIGH',t_onset:cl.t_onset,X:cl.X,Y:cl.Y,
+    zone:zoneOf(cx,cy),nearest_emt:nearestEMT(cx,cy),members:cl.members,t_surge_end:+(simT+45).toFixed(2)});
+  renderLog();
+}
+
+function visibleCount(a){let n=0;for(const c of calibs){if(inImg(c,project(c,a.x,a.y,.9)))n++;}return n;}
+function pickAgent({zone=null,near=null,radius=3,covered=true}={}){
+  let pool=A.filter(a=>!a.fixed&&a.mode!=='help'&&!a.emt&&!a.hidden&&!a.inc&&a.posture==='upright');
+  if(zone) pool=pool.filter(a=>zoneOf(a.x,a.y)===zone);
+  if(near) pool=pool.filter(a=>Math.hypot(a.x-near[0],a.y-near[1])<radius);
+  if(covered){const v=pool.filter(a=>visibleCount(a)>0); if(v.length) pool=v;}
+  return pool.length?pick(pool):null;
+}
+const ACTIONS={collapse:a=>doCollapse(a,'collapse'),collapse_recover:a=>doCollapse(a,'collapse_recover'),lie_down:doLieDown,sit:doSit,crouch:doCrouch};
+function runEvent(e){
+  if(e.type==='surge') return doSurge();
+  ACTIONS[e.type]?.(pickAgent({zone:e.zone,covered:e.covered!==false}));
+}
+
+
+// ───────────────────────────── EMT teams + dispatch loop (MoshSpot → /dispatch → walk to patient)
+let teams=[], dispatches=[], emtLog=[], lastCmd=0;
+const ACK={auto2:2,auto5:5,auto15:15};
+function spawnTeams(){
+  teams=VENUE.emt_posts.map(p=>{
+    const toCentre=Math.atan2(24-p.Y,0-p.X), members=[];
+    for(const k of [-1,1]){
+      const hx=p.X+k*.7*Math.sin(toCentre), hy=p.Y-k*.7*Math.cos(toCentre);
+      const a={id:A.length,x:hx,y:hy,hx,hy,vx:0,vy:0,h:toCentre,faceOff:toCentre-Math.PI/2,s:1,ph:rr(0,100),energy:0,arms:0,
+        mode:'emt',emt:p.id,path:[],onArrive:null,wx:hx,wy:hy,fixed:false,posture:'upright',anim:null,pose:copyPose(POSES.upright),wave:false,helper:null,inc:null};
+      A.push(a); members.push(a);
+    }
+    return {id:p.id,post:p,members,status:'available',job:null};
+  });
+  const vest=new THREE.Color(0xc8ff2e), dark=new THREE.Color(0x1a1f2a), skin=new THREE.Color(0xc68642);
+  for(const t of teams) for(const a of t.members){
+    PARTS.torso.setColorAt(a.id,vest); PARTS.uaL.setColorAt(a.id,vest); PARTS.uaR.setColorAt(a.id,vest);
+    PARTS.head.setColorAt(a.id,skin); PARTS.faL.setColorAt(a.id,skin); PARTS.faR.setColorAt(a.id,skin);
+    for(const k of ['thL','thR','shL','shR']) PARTS[k].setColorAt(a.id,dark);
+  }
+}
+// navigation: Dijkstra over a 0.5 m floor grid. Edge cost = walking time, so obstacles are walls,
+// dense crowd is slow, and people lying on the floor are walked around, not over.
+const NAV={x0:-30,y0:0,cs:.5,W:121,H:98};
+const navIdx=(x,y)=>Math.max(0,Math.min(NAV.W-1,Math.round((x-NAV.x0)/NAV.cs)))+Math.max(0,Math.min(NAV.H-1,Math.round((y-NAV.y0)/NAV.cs)))*NAV.W;
+const navXY=i=>[NAV.x0+(i%NAV.W)*NAV.cs, NAV.y0+Math.floor(i/NAV.W)*NAV.cs];
+const EMT_SPEED=1.5; // m/s in the clear
+function navCosts(){ // seconds per metre for each cell
+  const {W,H,cs}=NAV, cnt=new Float32Array(W*H), cost=new Float32Array(W*H);
+  for(const a of A){ if(a.emt||a.hidden||a.mode==='escort') continue; cnt[navIdx(a.x,a.y)]+=a.posture==='lying'?40:1; }
+  for(let cy=0;cy<H;cy++) for(let cx=0;cx<W;cx++){
+    const i=cx+cy*W, [x,y]=navXY(i);
+    if(insideObstacle(x,y,.5)){cost[i]=Infinity;continue;}
+    let n=0; for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){const X=cx+dx,Y=cy+dy; if(X>=0&&X<W&&Y>=0&&Y<H) n+=cnt[X+Y*W];}
+    const dens=n/(9*cs*cs); // people per m² over a 1.5 m window
+    cost[i]=(1+.45*Math.min(dens,12))/EMT_SPEED;
+  }
+  return cost;
+}
+function dijkstra(tx,ty,cost){ // single source at the target → walking time from every cell to it
+  const {W,H,cs}=NAV, dist=new Float64Array(W*H).fill(Infinity), prev=new Int32Array(W*H).fill(-1), src=navIdx(tx,ty);
+  const hd=[],hi=[]; // binary min-heap (parallel arrays: distance, cell)
+  const push=(d,i)=>{let k=hd.length;hd.push(d);hi.push(i);while(k>0){const q=(k-1)>>1;if(hd[q]<=hd[k])break;[hd[q],hd[k]]=[hd[k],hd[q]];[hi[q],hi[k]]=[hi[k],hi[q]];k=q;}};
+  const pop=()=>{const d=hd[0],i=hi[0],ld=hd.pop(),li=hi.pop();if(hd.length){hd[0]=ld;hi[0]=li;let k=0;for(;;){const l=2*k+1,r=l+1;let m=k;
+    if(l<hd.length&&hd[l]<hd[m])m=l;if(r<hd.length&&hd[r]<hd[m])m=r;if(m===k)break;[hd[m],hd[k]]=[hd[k],hd[m]];[hi[m],hi[k]]=[hi[k],hi[m]];k=m;}}return [d,i];};
+  const STEPS=[[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,Math.SQRT2],[1,-1,Math.SQRT2],[-1,1,Math.SQRT2],[-1,-1,Math.SQRT2]];
+  dist[src]=0; push(0,src);
+  while(hd.length){
+    const [d,i]=pop(); if(d>dist[i]) continue;
+    const cx=i%W, cy=(i-cx)/W;
+    for(const [dx,dy,l] of STEPS){
+      const X=cx+dx,Y=cy+dy; if(X<0||X>=W||Y<0||Y>=H) continue;
+      const j=X+Y*W; if(cost[j]===Infinity) continue;
+      if(dx&&dy&&(cost[X+cy*W]===Infinity||cost[cx+Y*W]===Infinity)) continue; // no cutting obstacle corners
+      const nd=d+l*cs*(Math.min(cost[i],20)+cost[j])/2;
+      if(nd<dist[j]){dist[j]=nd;prev[j]=i;push(nd,j);}
+    }
+  }
+  return {dist,prev,src};
+}
+const etaFrom=(field,x,y)=>field.dist[navIdx(x,y)];
+function navPath(field,x,y,gx,gy){ // follow the shortest-path tree from (x,y) to the source; waypoint every ~2 m
+  let i=navIdx(x,y), k=0; const pts=[];
+  if(field.dist[i]===Infinity) return [[gx,gy]];
+  while(i!==field.src && i!==-1){ i=field.prev[i]; if(++k%4===0 && i!==field.src) pts.push(navXY(i)); }
+  pts.push([gx,gy]); return pts;
+}
+function emitEMT(t,status,extra={}){
+  const j=t.job;
+  const ev={team:t.id,status,t:+simT.toFixed(2),clock:clockStr(simT),incident_id:j?.ext??null,sim_incident:j?.sim_incident??null,
+    X:j?+j.X.toFixed(2):null,Y:j?+j.Y.toFixed(2):null,...extra};
+  emtLog.push(ev); renderTeams();
+  if(bridge) fetch('/emt-events',{method:'POST',body:JSON.stringify(ev)}).catch(()=>{});
+}
+function rankTeams(field,X,Y){ // every team's true walking time to the patient, fastest first
+  return teams.map(t=>({team:t.id,status:t.status,eta_s:+etaFrom(field,t.post.X,t.post.Y).toFixed(1),straight_m:+Math.hypot(t.post.X-X,t.post.Y-Y).toFixed(1)}))
+    .sort((a,b)=>a.eta_s-b.eta_s);
+}
+function findTeam(cmd){return cmd.team?teams.find(t=>t.id===cmd.team):teams.find(t=>t.job&&cmd.incident_id!=null&&t.job.ext===cmd.incident_id);}
+function handleCommand(cmd){
+  const act=cmd.action||'dispatch';
+  if(act!=='dispatch'){
+    const t=findTeam(cmd); if(!t||!t.job) return;
+    if(act==='accept'){ if(t.status==='dispatched' && $('ackMode').value==='api') acceptJob(t); }
+    else endJob(t,act);
+    return;
+  }
+  const X=+cmd.X, Y=+cmd.Y; if(!isFinite(X)||!isFinite(Y)) return;
+  // the sim's patient: nearest person on the ground within 4 m who isn't already being treated
+  let patient=null,bd=4;
+  for(const a of A){ if(a.posture!=='lying'||a.hidden||a.treatedBy) continue; const d=Math.hypot(a.x-X,a.y-Y); if(d<bd){bd=d;patient=a;} }
+  // no team named → send the free team with the shortest walking time (Dijkstra), not the shortest straight line
+  const field=dijkstra(patient?patient.x:X, patient?patient.y:Y, navCosts());
+  const ranking=rankTeams(field,X,Y);
+  const pickId=cmd.team ?? ranking.find(r=>r.status==='available'&&isFinite(r.eta_s))?.team;
+  const t=teams.find(t=>t.id===pickId);
+  if(!t){ emitEMT({id:cmd.team||'NONE',job:{ext:cmd.incident_id??null,X,Y}},'rejected',{reason:cmd.team?'unknown team':'no available team',ranking}); return; }
+  if(t.status!=='available'){ emitEMT({...t,job:{ext:cmd.incident_id??null,X,Y}},'rejected',{reason:`busy (${t.status})`,ranking}); return; }
+  if(patient) patient.treatedBy=t.id;
+  const job={ext:cmd.incident_id??null,X,Y,patient,sim_incident:patient?.inc?.id||null,t_dispatch:simT,t_accept:null,t_arrive:null,t_resolve:null,outcome:null};
+  t.job=job; t.status='dispatched';
+  dispatches.push(job); job.team=t.id;
+  emitEMT(t,'dispatched',{patient_found:!!patient,chosen_by:cmd.team?'moshspot':'dijkstra',ranking});
+  const mode=$('ackMode').value;
+  if(mode in ACK) timers.push({t:simT+ACK[mode],fn:()=>{ if(t.job===job && t.status==='dispatched') acceptJob(t); }});
+}
+function acceptJob(t){
+  const j=t.job; j.t_accept=simT; t.status='en_route';
+  const px=j.patient?j.patient.x:j.X, py=j.patient?j.patient.y:j.Y;
+  const field=dijkstra(px,py,navCosts()); // re-plan: the crowd has moved since dispatch
+  const lead=navPath(field,t.members[0].x,t.members[0].y,px,py), from=lead.length>1?lead[lead.length-2]:[t.members[0].x,t.members[0].y];
+  const ang=Math.atan2(py-from[1],px-from[0]); // kneel either side of the patient, facing the way the team came in
+  emitEMT(t,'accepted'); emitEMT(t,'en_route',{eta_s:+etaFrom(field,t.members[0].x,t.members[0].y).toFixed(0)});
+  const slots=[-1,1].map(side=>[px-Math.cos(ang)*.35+side*.75*-Math.sin(ang), py-Math.sin(ang)*.35+side*.75*Math.cos(ang)]);
+  const [m0,m1]=t.members, d=(m,g)=>Math.hypot(m.x-g[0],m.y-g[1]);
+  if(d(m0,slots[1])+d(m1,slots[0]) < d(m0,slots[0])+d(m1,slots[1])) slots.reverse(); // each medic takes the nearer side
+  t.members.forEach((m,k)=>{
+    const [gx,gy]=slots[k];
+    m.anim=null; m.fixed=false; m.posture='upright'; m.path=navPath(field,m.x,m.y,gx,gy);
+    m.onArrive=()=>{ m.fixed=true; m.h=Math.atan2(py-m.y,px-m.x); m.posture='crouching'; m.arrived=true; makeAnim(m,[[.8,POSES.crouch]]);
+      if(t.members.every(q=>q.arrived)) onScene(t); };
+  });
+}
+function onScene(t){
+  const j=t.job; j.t_arrive=simT; t.status='on_scene';
+  emitEMT(t,'on_scene',{patient_found:!!j.patient,response_s:+(simT-j.t_dispatch).toFixed(1)});
+  if(j.patient?.inc){ j.patient.inc.emt_on_scene=+simT.toFixed(2);
+    for(const b of A) if(b.helper===j.patient.inc.id) releaseHelper(b); }
+  if($('autoResolve').checked) timers.push({t:simT+40,fn:()=>{ if(t.job===j && t.status==='on_scene') endJob(t,'resolve'); }});
+}
+function endJob(t,act){
+  const j=t.job; if(!j) return;
+  j.t_resolve=simT; j.outcome=act==='cancel'?'cancelled':act==='false_alarm'?'false_alarm':(j.patient?'resolved':'no_patient_found');
+  emitEMT(t,j.outcome);
+  t.status='returning';
+  const p=j.patient; let wait=0;
+  if(p && act==='resolve' && p.posture==='lying'){
+    // patient is helped up and walked out with the team (escorted to the EMT post, then leaves the floor)
+    wait=4.8; p.posture='sitting';
+    makeAnim(p,[[2,POSES.sit],[1.4,POSES.crouch],[1.2,POSES.upright]],()=>{p.anim=null;p.posture='upright';p.fixed=false;p.mode='escort';p.escortBy=t.members[0];p.escortTeam=t;});
+    if(p.inc) p.inc.t_evacuated=null;
+  } else if(p) p.treatedBy=null;
+  const goHome=()=>t.members.forEach((m,k)=>{
+    m.posture='upright';
+    makeAnim(m,[[.8,POSES.upright]],()=>{ m.anim=null; m.fixed=false; m.arrived=false; m.path=navPath(dijkstra(m.hx,m.hy,navCosts()),m.x,m.y,m.hx,m.hy);
+      m.onArrive=()=>{ m.home=true; if(t.members.every(q=>q.home||q===m)){ t.members.forEach(q=>q.home=false); t.status='available'; t.job=null; emitEMT(t,'available'); } }; });
+  });
+  if(wait) timers.push({t:simT+wait,fn:goHome}); else goHome();
+}
+async function pollCommands(){
+  if(!bridge) return;
+  try{ const r=await (await fetch(`/commands?after=${lastCmd}`,{cache:'no-store'})).json();
+    for(const c of r.commands) handleCommand(c); lastCmd=r.last; }catch{}
+}
+function renderTeams(){
+  const el=$('teams'); if(!el) return;
+  const col={available:'#5ad17a',dispatched:'#ffb547',en_route:'#ffb547',on_scene:'#ff4d5e',returning:'#8a91a3'};
+  el.innerHTML=teams.map(t=>`<div><b style="color:${col[t.status]}">●</b> ${t.id} <span style="color:#8a91a3">${t.post.name}</span> — ${t.status.replace('_',' ')}${t.job?` → ${t.job.ext??t.job.sim_incident??'manual'}`:''}</div>`).join('')+
+    (emtLog.length?`<div class="hint" style="margin-top:4px">${emtLog.slice(-3).reverse().map(e=>`${e.clock} ${e.team} ${e.status}`).join('<br>')}</div>`:'');
+}
+
+// ───────────────────────────── scenarios
+function buildScenario(kind,seed){
+  const r=mulberry32(seed*9301+49297), zones=['PIT-L','PIT-R','GA-MID','GA-MID','GA-BACK'];
+  const spread=(counts,D,minGap=12)=>{
+    const ev=[]; const ts=[];
+    for(const [type,n] of Object.entries(counts)) for(let i=0;i<n;i++){
+      let t; for(let k=0;k<50;k++){t=15+r()*(D-45); if(ts.every(s=>Math.abs(s-t)>minGap))break;}
+      ts.push(t); ev.push({t:+t.toFixed(1),type,zone:type==='sit'?(r()<.7?'GA-BACK':'GA-MID'):zones[Math.floor(r()*zones.length)],covered:r()<.9});
+    }
+    return ev.sort((a,b)=>a.t-b.t);
+  };
+  switch(kind){
+    case 'demo': return {kind,duration:180,events:[
+      {t:12,type:'collapse',zone:'PIT-L'},{t:35,type:'sit',zone:'GA-BACK'},{t:52,type:'crouch',zone:'GA-MID'},
+      {t:70,type:'collapse',zone:'GA-MID'},{t:95,type:'collapse_recover',zone:'PIT-R'},{t:115,type:'lie_down',zone:'GA-BACK'},{t:132,type:'surge'}]};
+    case 'eval': return {kind,duration:600,events:spread({collapse:6,lie_down:2,collapse_recover:3,sit:8,crouch:8},600)};
+    case 'crush': return {kind,duration:120,events:[{t:10,type:'surge'}]};
+    case 'soak': return {kind,duration:600,events:spread({sit:12,crouch:16},600,8)};
+    default: return {kind:'sandbox',duration:Infinity,events:[]};
+  }
+}
+let seed=7;
+function resetAll(){
+  seed=+$('seed').value||1; rand=mulberry32(seed);
+  simT=0; timers=[]; incidents=[]; dispatches=[]; emtLog=[]; incSeq=0; clusterSeq=0; surge=null; evPtr=0; frameIdx=0; capClock=0;
+  computeCalib();
+  resetCrowd(Math.max(100,Math.min(3000,+$('crowd').value||1500)));
+  scenario=buildScenario($('scenario').value,seed);
+  $('scenarioPill').textContent=`${scenario.kind} · seed ${seed}`+(isFinite(scenario.duration)?` · ${scenario.duration}s`:'');
+  renderLog();
+}
+
+// ───────────────────────────── per-frame visuals
+const _pose=copyPose(POSES.upright);
+function updateVisuals(){
+  const beat=simT*2*Math.PI*(128/60), calibView=$('calib').checked;
+  for(const m of Object.values(PARTS)) m.visible=!calibView;
+  for(let i=0;i<N;i++){
+    const a=A[i]; let jump=0;
+    if(a.hidden){ _t.makeScale(0,0,0); for(const m of Object.values(PARTS)) m.setMatrixAt(i,_t); continue; }
+    if(a.anim) evalAnim(a.anim,_pose);
+    else{
+      copyPose(POSES.upright,_pose);
+      const sp=Math.hypot(a.vx,a.vy), amp=Math.min(sp/1.2,1)*.5, s=Math.sin(a.ph);
+      _pose.hipL=s*amp; _pose.hipR=-s*amp; _pose.kneeL=.05+Math.max(0,-s)*amp*1.2; _pose.kneeR=.05+Math.max(0,s)*amp*1.2;
+      _pose.shPL=-s*amp*.6; _pose.shPR=s*amp*.6;
+      const want=(!a.emt && Math.sin(simT*.37+a.ph*5)>.75-a.energy*.55 && sp<.4)?1:0;
+      a.arms+=(want-a.arms)*.08;
+      if(a.arms>.01) lerpPose(_pose,POSES.armsUp,a.arms,_pose);
+      if(sp<.4){ const b=Math.max(0,Math.sin(beat+a.ph)); jump=a.energy*a.energy*b*.13; _pose.nod=.15*b*a.energy; }
+    }
+    if(a.wave){ _pose.shPR=-2.9; _pose.shRR=.35+.45*Math.sin(simT*9); _pose.elR=.2; }
+    copyPose(_pose,a.pose);
+    fk(a,_pose,jump,i,null);
+  }
+  for(const m of Object.values(PARTS)) m.instanceMatrix.needsUpdate=true;
+  // lighting (driven by sim time so recorded runs are reproducible)
+  const house=+$('house').value;
+  let amb=.06+house*.7;
+  if($('strobe').checked && Math.floor(simT*12)%7===0) amb+=2.5;
+  ambient.intensity=amb; hemi.intensity=.05+house*.5; wash.intensity=.15+house*.8;
+  scene.fog.density=+$('haze').value;
+  spots.forEach((s,i)=>{s.target.position.copy(v2t(Math.sin(simT*.4+i*1.7)*18, 32+Math.cos(simT*.33+i)*12, 0));});
+  screenMat.color.setHSL((simT*.05)%1,.7,.25+.15*Math.max(0,Math.sin(beat)));
+}
+
+function renderTiles(){
+  renderer.setScissorTest(true);
+  for(let i=0;i<4;i++){
+    const col=i%2,row=Math.floor(i/2);
+    renderer.setViewport(col*TW,(1-row)*TH,TW,TH); renderer.setScissor(col*TW,(1-row)*TH,TW,TH);
+    renderer.render(scene,cams[i]);
+  }
+  renderer.setScissorTest(false);
+}
+function setRes(){
+  [TW,TH]=$('res').value.split('x').map(Number);
+  renderer.setSize(TW*2,TH*2,false);
+  capCanvases.forEach(c=>{c.width=TW;c.height=TH;});
+  computeCalib();
+}
+
+// ───────────────────────────── capture → bridge
+const capCanvases=[0,1,2,3].map(()=>document.createElement('canvas'));
+let bridge=false, pending=0, frameIdx=0, capClock=0, recording=null;
+const clockStr=t=>{const s=21*3600+Math.floor(t);return [Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(v=>String(v).padStart(2,'0')).join(':');};
+function capture(run){
+  if(!bridge) return;
+  const osd=$('osd').checked, ts=`2026-10-25 ${clockStr(simT)}.${String(Math.floor((simT%1)*10))}`;
+  for(let i=0;i<4;i++){
+    const c=capCanvases[i], g=c.getContext('2d'), col=i%2,row=Math.floor(i/2);
+    g.drawImage(gl,col*TW,row*TH,TW,TH,0,0,TW,TH);
+    if(osd){g.font=`${Math.round(TH/26)}px monospace`;g.fillStyle='rgba(0,0,0,.5)';g.fillRect(4,4,TH*0.62,TH/20);g.fillStyle='#e8e8e8';g.fillText(`${VENUE.cameras[i].id} ${ts}`,8,4+TH/26);}
+    const q=new URLSearchParams({idx:frameIdx,t:simT.toFixed(3)}); if(run) q.set('run',run);
+    pending++;
+    c.toBlob(b=>fetch(`/frame/${VENUE.cameras[i].id}?${q}`,{method:'POST',body:b}).catch(()=>{}).finally(()=>pending--),'image/jpeg',.85);
+  }
+  if(run) postFrameGT(run);
+  frameIdx++;
+}
+// per-frame GT: every person not standing upright (+ helpers), with per-camera bbox and COCO-17 keypoints
+const _kps=new Array(17);
+function frameGT(){
+  const persons=[];
+  for(const a of A){
+    if(a.hidden || (a.posture==='upright' && !a.helper)) continue;
+    fk(a,a.pose,0,-1,_kps);
+    const kp=_kps.map(p=>p.slice()), top=Math.max(...kp.map(p=>p[2]));
+    const per={};
+    for(const c of calibs){
+      const pp=kp.map(p=>project(c,...p)); const ok=pp.filter(p=>inImg(c,p));
+      if(ok.length<3) continue;
+      const xs=ok.map(p=>p[0]),ys=ok.map(p=>p[1]), pad=.12*(Math.max(...ys)-Math.min(...ys)+Math.max(...xs)-Math.min(...xs))/2;
+      per[c.id]={bbox:[Math.min(...xs)-pad,Math.min(...ys)-pad,Math.max(...xs)+pad,Math.max(...ys)+pad].map(v=>+v.toFixed(1)),
+        kps:pp.map(p=>p?[+p[0].toFixed(1),+p[1].toFixed(1),inImg(c,p)?2:0]:[0,0,0])};
+    }
+    persons.push({id:a.id,posture:a.posture,role:a.emt?'emt':a.helper?'helper':(a.inc?.type||null),incident:a.inc?.id||a.helper||null,
+      height_ratio:+(top/(STAND_H*a.s)).toFixed(3),X:+a.x.toFixed(2),Y:+a.y.toFixed(2),cams:per});
+  }
+  return {frame:frameIdx,t:+simT.toFixed(3),persons};
+}
+function postFrameGT(run){
+  pending++;
+  fetch(`/gt-frames?run=${run}`,{method:'POST',body:JSON.stringify(frameGT())}).catch(()=>{}).finally(()=>pending--);
+}
+function buildGT(){
+  const markers_px={}; for(const c of calibs){markers_px[c.id]=VENUE.markers.map(m=>{const p=project(c,m.X,m.Y,0);return inImg(c,p)?{id:m.id,u:+p[0].toFixed(2),v:+p[1].toFixed(2)}:null;}).filter(Boolean);}
+  return {schema:'moshspot-sim/gt@1',run:recording?.run||null,scenario:scenario.kind,seed,crowd:crowdN,fps:+$('fps').value,
+    frame_count:frameIdx,duration_s:+simT.toFixed(2),clock_start:'2026-10-25T21:00:00',image_size:[TW,TH],
+    coordinate_frame:'venue metres — X right (facing stage), Y toward stage, Z up; origin = back-centre floor. Extrinsics map venue→OpenCV camera (x right, y down, z forward).',
+    venue:{name:VENUE.name,bounds:VENUE.bounds,stage:VENUE.stage,barricade_y:VENUE.barricade_y,zones:VENUE.zones,obstacles:VENUE.obstacles,emt_posts:VENUE.emt_posts,markers:VENUE.markers},
+    cameras:calibs.map(c=>({...c,markers_px:markers_px[c.id]})),
+    incidents,
+    dispatches:dispatches.map(({patient,...j})=>({...j,patient_agent:patient?.id??null,response_s:j.t_arrive!=null?+(j.t_arrive-j.t_dispatch).toFixed(1):null})),
+    emt_events:emtLog,
+    notes:['should_alert=true: collapse / lie_down / crush_collapse / crush_cluster. Distractors (sit, crouch, collapse_recover) should NOT dispatch.',
+      'Frame k of a recorded run is at t = k / fps seconds of sim time.','Keypoint visibility marks in-frame only; occlusion by other people is not modelled in GT.']};
+}
+const download=(name,obj)=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(obj,null,1)],{type:'application/json'}));a.download=name;a.click();};
+
+async function checkBridge(){
+  try{const r=await fetch('/status',{cache:'no-store'}); bridge=r.ok;}catch{bridge=false;}
+  $('bridgePill').textContent=bridge?'bridge: connected':'bridge: offline'; $('bridgePill').className='pill'+(bridge?' ok':'');
+  $('outHint').innerHTML=bridge?`Live MJPEG: <code>${location.origin}/mjpeg/CAM-1</code> … <code>CAM-4</code>`:'Start <code>python3 bridge.py</code> to enable MJPEG streams and recorded runs.';
+}
+
+async function startRecording(){
+  if(!bridge){alert('Recording needs the bridge (python3 bridge.py).');return;}
+  resetAll();
+  const run=`${scenario.kind}-s${seed}-${new Date().toISOString().slice(0,19).replace(/[-:T]/g,'')}`;
+  const dur=isFinite(scenario.duration)?scenario.duration:120;
+  recording={run,dur}; $('recPill').hidden=false; $('recPill').className='pill rec';
+}
+function recordTick(){
+  // deterministic: fixed sim step per captured frame, as fast as rendering + upload allow
+  if(pending>24) return;
+  const fps=+$('fps').value, sub=Math.ceil(30/fps);
+  for(let k=0;k<sub;k++) step(1/fps/sub);
+  updateVisuals(); renderTiles(); capture(recording.run);
+  $('recPill').textContent=`● REC ${recording.run} ${Math.floor(simT)}/${recording.dur}s`;
+  if(simT>=recording.dur){
+    const gt=buildGT();
+    fetch(`/gt?run=${recording.run}`,{method:'POST',body:JSON.stringify(gt,null,1)});
+    $('recPill').textContent=`✓ saved runs/${recording.run}`; $('recPill').className='pill ok';
+    recording=null;
+  }
+}
+
+// ───────────────────────────── map
+const mapC=$('map'), mctx=mapC.getContext('2d');
+let mapT=null;
+function mapXf(){
+  const w=mapC.clientWidth,h=mapC.clientHeight,dpr=devicePixelRatio||1;
+  if(mapC.width!==w*dpr){mapC.width=w*dpr;mapC.height=h*dpr;}
+  const s=Math.min(w/64,h/64)*dpr, ox=mapC.width/2, oy=mapC.height/2+30*s;
+  mapT={s,ox,oy,to:(X,Y)=>[ox+X*s,oy-Y*s],from:(u,v)=>[(u-ox)/s,(oy-v)/s]};
+}
+function drawMap(){
+  mapXf(); const {s,to}=mapT, g=mctx;
+  g.clearRect(0,0,mapC.width,mapC.height);
+  const zc={'PIT-L':'#2a1e36','PIT-R':'#2a1e36','GA-MID':'#1b2433','GA-BACK':'#172028'};
+  for(const z of VENUE.zones){g.beginPath();z.poly.forEach((p,i)=>{const[u,v]=to(...p);i?g.lineTo(u,v):g.moveTo(u,v);});g.closePath();g.fillStyle=zc[z.id];g.fill();
+    const[u,v]=to(z.poly[0][0]+1,z.poly[2][1]-1.5);g.fillStyle='#55607a';g.font=`${9*s/4}px sans-serif`;g.fillText(z.id,u,v);}
+  const r=(x0,y0,x1,y1,c)=>{const[a,b]=to(x0,y1),[c2,d]=to(x1,y0);g.fillStyle=c;g.fillRect(a,b,c2-a,d-b);};
+  r(S.xmin,S.ymin,S.xmax,S.ymax,'#30303c'); r(-30,48.6,30,49,'#9aa0aa'); r(O.xmin,O.ymin,O.xmax,O.ymax,'#3a4150');
+  for(const c of calibs){const f=footprint(c);g.beginPath();f.pts.forEach((p,i)=>{const[u,v]=to(...p);i?g.lineTo(u,v):g.moveTo(u,v);});g.closePath();
+    g.fillStyle='rgba(79,209,197,.05)';g.strokeStyle='rgba(79,209,197,.35)';g.fill();g.stroke();
+    const[u,v]=to(c.position[0],c.position[1]);g.fillStyle='#4fd1c5';g.fillRect(u-3,v-3,6,6);g.font=`${8*s/4}px sans-serif`;g.fillText(c.id,u+4,v-3);}
+  for(const t of teams) if(t.job&&(t.status==='en_route'||t.status==='dispatched')){
+    const m=t.members[0],[u0,v0]=to(m.x,m.y),[u1,v1]=to(t.job.X,t.job.Y);
+    g.strokeStyle='#c8ff2e';g.setLineDash([3,3]);g.lineWidth=1.2;g.beginPath();g.moveTo(u0,v0);
+    if(t.status==='en_route') for(const p of m.path){const[u,v]=to(...p);g.lineTo(u,v);} else g.lineTo(u1,v1);
+    g.stroke();g.setLineDash([]);
+  }
+  for(const a of A){
+    if(a.hidden) continue;
+    const[u,v]=to(a.x,a.y);
+    if(a.emt){g.fillStyle='#c8ff2e';g.fillRect(u-3*s/4,v-3*s/4,6*s/4,6*s/4);continue;}
+    g.fillStyle=a.posture==='lying'||a.posture==='falling'?'#ff4d5e':a.helper?'#4fd1c5':(a.posture!=='upright'?'#ffb547':'#6b7385');
+    const big=a.posture!=='upright'||a.helper; g.fillRect(u-(big?2:1)*s/4,v-(big?2:1)*s/4,(big?4:2)*s/4,(big?4:2)*s/4);
+  }
+  for(const e of VENUE.emt_posts){const[u,v]=to(e.X,e.Y);g.fillStyle='#5ad17a';g.fillRect(u-4,v-1.5,8,3);g.fillRect(u-1.5,v-4,3,8);g.font=`${8*s/4}px sans-serif`;g.fillText(e.id,u+6,v+3);}
+  for(const inc of incidents){ if(!inc.should_alert||inc.t_recover||inc.type==='crush_cluster')continue;
+    const[u,v]=to(inc.X,inc.Y),p=1+.5*Math.sin(simT*6);g.strokeStyle='#ff4d5e';g.lineWidth=1.5;g.beginPath();g.arc(u,v,(5+3*p)*s/4,0,7);g.stroke();}
+  if(surge&&simT<surge.until){const[u,v]=to(surge.cx,surge.cy);g.strokeStyle='#ffb547';g.setLineDash([4,3]);g.beginPath();g.arc(u,v,6*s,0,7);g.stroke();g.setLineDash([]);}
+}
+function nearestAgent(X,Y,maxD=2.5){let best=null,bd=maxD;for(const a of A){if(a.fixed||a.mode==='help'||a.emt||a.hidden)continue;const d=Math.hypot(a.x-X,a.y-Y);if(d<bd){bd=d;best=a;}}return best;}
+mapC.addEventListener('click',e=>{const dpr=devicePixelRatio||1;const[X,Y]=mapT.from(e.offsetX*dpr,e.offsetY*dpr);ACTIONS[$('clickAction').value](nearestAgent(X,Y));});
+const ray=new THREE.Raycaster(), groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
+gl.addEventListener('click',e=>{
+  const fx=e.offsetX/gl.clientWidth, fy=e.offsetY/gl.clientHeight, i=(fx>=.5?1:0)+(fy>=.5?2:0);
+  const nx=((fx%.5)/.5)*2-1, ny=-(((fy%.5)/.5)*2-1);
+  ray.setFromCamera(new THREE.Vector2(nx,ny),cams[i]); const hit=new THREE.Vector3();
+  if(ray.ray.intersectPlane(groundPlane,hit)) ACTIONS[$('clickAction').value](nearestAgent(hit.x,-hit.z));
+});
+
+// ───────────────────────────── UI
+function $(id){return document.getElementById(id);}
+function renderLog(){
+  const el=$('log'); if(!el) return;
+  el.innerHTML=incidents.slice().reverse().map(i=>{
+    const cls=i.type==='crush_cluster'?'t-crush':i.should_alert?'t-pos':'t-neg';
+    const st=i.type==='crush_cluster'?`${i.members.length} down`:i.t_recover?`recovered ${i.t_recover}s`:i.t_down!=null?`down ${i.t_down}s`:'…';
+    return `<div><span>${clockStr(i.t_onset)}</span><span class="tag ${cls}">${i.type}</span><span>${i.zone||''}</span><span style="color:#8a91a3">${st} ${i.visible_in?.length?'· '+i.visible_in.join(','):i.visible_in?'· no cam':''}</span></div>`;
+  }).join('')||'<span class="hint">No incidents yet. Click a person, or pick a scenario.</span>';
+}
+let running=true, speed=1, last=performance.now(), fpsAcc=0, fpsN=0;
+$('btnReset').onclick=resetAll;
+$('btnPause').onclick=()=>{running=!running;$('btnPause').textContent=running?'Pause':'Resume';};
+$('speed').onchange=e=>speed=+e.target.value;
+$('btnRandom').onclick=()=>doCollapse(pickAgent({}),'collapse');
+$('btnSurge').onclick=doSurge;
+$('res').onchange=setRes;
+$('btnRecord').onclick=startRecording;
+$('btnGT').onclick=()=>download(`moshspot-gt-${scenario.kind}-s${seed}.json`,buildGT());
+$('btnVenue').onclick=()=>{const g=buildGT();delete g.incidents;download('moshspot-venue.json',g);};
+VENUE.cameras.forEach((c,i)=>$('lab'+i).textContent=`${c.id} · ${c.name}`);
+
+function loop(now){
+  requestAnimationFrame(loop);
+  if(recording){recordTick();drawMap();return;}
+  const dt=Math.min(.1,(now-last)/1000); last=now;
+  fpsAcc+=dt; fpsN++; if(fpsAcc>1){$('fpsPill').textContent=`${Math.round(fpsN/fpsAcc)} fps`;fpsAcc=0;fpsN=0;}
+  if(running){
+    let rem=dt*speed; while(rem>1e-6){const h=Math.min(rem,1/30);step(h);rem-=h;}
+    capClock+=dt*speed;
+  }
+  updateVisuals(); renderTiles();
+  const fps=+$('fps').value;
+  if(running && $('stream').checked && capClock>=1/fps && pending<12){capClock=capClock>2/fps?0:capClock-1/fps; capture(null);}
+  drawMap();
+  $('clock').textContent=clockStr(simT);
+}
+setRes(); resetAll(); checkBridge(); setInterval(checkBridge,5000);
+// skip commands queued before this page loaded, then poll for new ones
+fetch('/commands',{cache:'no-store'}).then(r=>r.json()).then(r=>{lastCmd=r.last;setInterval(pollCommands,400);}).catch(()=>setInterval(pollCommands,400));
+$('btnDispatch').onclick=()=>{const inc=incidents.slice().reverse().find(i=>i.should_alert&&i.t_down!=null&&i.type!=='crush_cluster'&&!i.t_evacuated);
+  if(inc) handleCommand({action:'dispatch',X:inc.X,Y:inc.Y,incident_id:`manual-${inc.id}`});};
+requestAnimationFrame(loop);
+window.moshspot={handleCommand,dijkstra,navCosts,navIdx,navXY,get teams(){return teams;},cams,renderer,scene,THREE,v2t,get A(){return A;},get incidents(){return incidents;},get calibs(){return calibs;},doCollapse,pickAgent,buildGT,step};
+</script>
+</body>
+</html>
