@@ -25,8 +25,8 @@ def main():
     p.add_argument("--window", type=float, default=90.0)
     a = p.parse_args()
 
-    gt = json.load(open(a.gt))
-    alerts = [json.loads(l) for l in open(a.alerts) if l.strip()]
+    gt = json.load(open(a.gt, encoding="utf-8"))
+    alerts = [json.loads(l) for l in open(a.alerts, encoding="utf-8") if l.strip()]
     incs = [i for i in gt["incidents"] if i["type"] != "crush_cluster" and i.get("t_down") is not None]
     pos = [i for i in incs if i["should_alert"]]
     neg = [i for i in incs if not i["should_alert"]]
@@ -82,7 +82,7 @@ def main():
               f"{sum(d.get('outcome') == 'cancelled' for d in disp)} cancelled/escalated)")
         if on_scene:
             down_to_scene = [d["t_arrive"] - by_id[d["sim_incident"]]["t_down"] for d in on_scene]
-            print(f"down → EMT on scene  median {statistics.median(down_to_scene):.1f}s, max {max(down_to_scene):.1f}s "
+            print(f"down -> EMT on scene  median {statistics.median(down_to_scene):.1f}s, max {max(down_to_scene):.1f}s "
                   f"(n={len(on_scene)})")
 
 

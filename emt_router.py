@@ -69,7 +69,7 @@ class EmtRouter:
 
     @classmethod
     def from_venue_json(cls, path_or_obj) -> "EmtRouter":
-        obj = json.load(open(path_or_obj)) if isinstance(path_or_obj, str) else path_or_obj
+        obj = json.load(open(path_or_obj, encoding="utf-8")) if isinstance(path_or_obj, str) else path_or_obj
         v = obj.get("venue", obj)  # sim exports nest it under "venue"; a bare venue map works too
         return cls(v["bounds"], v.get("obstacles", []), v["emt_posts"])
 
@@ -186,7 +186,7 @@ def main():
     a = ap.parse_args()
     people, lying = [], []
     if a.people:
-        d = json.load(open(a.people))
+        d = json.load(open(a.people, encoding="utf-8"))
         people, lying = (d, []) if isinstance(d, list) else (d.get("people", []), d.get("lying", []))
     router = EmtRouter.from_venue_json(a.venue)
     ranking = router.rank(a.X, a.Y, people, lying, [b for b in a.busy.split(",") if b])
@@ -194,7 +194,7 @@ def main():
         tag = "" if r.available else " (busy)"
         print(f"{r.team:8} walk {r.eta_s:6.1f}s   straight {r.straight_m:5.1f}m{tag}")
     best = next((r for r in ranking if r.path), None)
-    print(f"→ dispatch {best.team} ({len(best.path)} waypoints)" if best else "→ no team available")
+    print(f"-> dispatch {best.team} ({len(best.path)} waypoints)" if best else "-> no team available")
 
 
 if __name__ == "__main__":

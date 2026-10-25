@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from emt_router import EmtRouter  # noqa: E402
 
-SNAP = json.load(open(ROOT / "tests" / "fixtures" / "sim_snapshot.json"))
+SNAP = json.load(open(ROOT / "tests" / "fixtures" / "sim_snapshot.json", encoding="utf-8"))
 EMPTY_VENUE = {"bounds": {"xmin": -30, "xmax": 30, "ymin": 0, "ymax": 48.2},
                "obstacles": [{"id": "FOH", "xmin": -4, "xmax": 4, "ymin": 13, "ymax": 19}],
                "emt_posts": [{"id": "SOUTH", "X": 0, "Y": 11.5}, {"id": "WEST", "X": -14, "Y": 22}]}

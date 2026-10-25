@@ -9,6 +9,12 @@ python3 bridge.py            # → http://localhost:8780  (PORT env var to chang
 ```
 Requires Python 3.9+ and a browser with WebGL. No `pip install` needed.
 
+| Platform | Run | Notes |
+|---|---|---|
+| macOS (Apple Silicon or Intel) | `python3 bridge.py` | On Intel Macs with integrated graphics, if the fps pill drops below about 30, use 960×540 tiles or a crowd of about 1,000. Recorded runs are deterministic at any fps; a slower machine just takes longer to record. |
+| Windows 10/11 | `py bridge.py` (or `python bridge.py`) | Different port: `$env:PORT=8781; py bridge.py` in PowerShell. Use Chrome or Edge. Recorded frames go to `runs\<run>\CAM-1\%06d.jpg`, which `cv.VideoCapture` reads the same way. |
+| Linux | `python3 bridge.py` | Any desktop browser with WebGL. |
+
 ## What it simulates
 
 | | |
