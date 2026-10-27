@@ -330,7 +330,13 @@ class IncidentAgent:
         for inc in self.incidents:
             memory = INCIDENT_MEMORY if inc.state == "alerted" else 120.0
             if np.hypot(inc.X - X, inc.Y - Y) <= INCIDENT_RADIUS and t - inc.ring_t <= memory:
-                if camera_id not in inc.cameras and inc.state == "watching":
+                if inc.state == "review":
+                    # Stronger evidence than the zoomed looks that opened it: decide it properly now.
+                    inc.state, inc.source, inc.priority = "watching", "ring", None
+                    inc.decide_at = max(t, inc.onset + DECIDE_AFTER_ONSET)
+                    inc.log(t, "help_ring", camera=camera_id, helpers=helpers, arm_up=arm_up, X=round(X, 2), Y=round(Y, 2),
+                            note="a persistent help ring formed: no longer just a review item")
+                elif camera_id not in inc.cameras and inc.state == "watching":
                     inc.log(t, "corroborated", camera=camera_id, helpers=helpers)
                 inc.cameras.add(camera_id)
                 inc.helpers, inc.arm_up = max(inc.helpers, helpers), inc.arm_up or arm_up

@@ -53,6 +53,8 @@ def main():
     parser.add_argument("--calibration", required=True, help="gt.json of a recorded run (cameras + venue)")
     parser.add_argument("--fps", type=float, default=5.0)
     parser.add_argument("--replay", help="loop a recorded run (runs/<run>) as live cameras instead of the bridge streams")
+    parser.add_argument("--cameras", help="comma-separated camera ids to watch (default: all in the calibration)")
+    parser.add_argument("--threads", type=int, help="OpenCV threads per camera (default: all cores shared between cameras)")
     parser.add_argument("--out", default="runs/live", help="directory for alerts.jsonl and traces.jsonl")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -61,9 +63,10 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    entries = {c["id"]: c for c in gt["cameras"]}
+    wanted = set(args.cameras.split(",")) if args.cameras else None
+    entries = {c["id"]: c for c in gt["cameras"] if wanted is None or c["id"] in wanted}
     results, stop = mp.Queue(maxsize=64), mp.Event()
-    threads = max(1, (os.cpu_count() or 4) // len(entries))
+    threads = args.threads or max(1, (os.cpu_count() or 4) // len(entries))
     suffix = f"?token={token}" if token else ""
     if args.replay:  # always-on demo: the recorded run loops forever at real speed
         replay_fps = json.loads((Path(args.replay) / "gt.json").read_text())["fps"]

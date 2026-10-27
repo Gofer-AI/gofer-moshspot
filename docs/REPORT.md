@@ -165,14 +165,14 @@ flowchart TD
 
 | Run | Role | Real incidents | Recall | False alarms on look-alikes | Unmatched alerts | Median time to alert |
 |---|---|---|---|---|---|---|
-| `demo-s7` (3 min) | dev: all tuning happened here | 9 (5 collapses, 3 crush victims, 1 slow lie-down) | **2/9** | **0/3** | **0** (0/h) | **14.1 s** after the person is down |
+| `demo-s7` (3 min) | dev: all tuning happened here | 9 (5 collapses, 3 crush victims, 1 slow lie-down) | **2/9** | **0/3** | **1** (20/h) | **14.1 s** after the person is down |
 | `eval-s7` (10 min) | first held-out run; became the diagnostic run | 8 (6 collapses, 2 slow lie-downs) | 0/8 | 1/19 | 3 (18/h) | — |
 | `eval-s11` (10 min) | fresh held-out run for perception v2 | *running* | | | | |
 | `soak-s7` (first 5 min) | look-alikes only: false-alarm rate for v2 | *running* | | | | |
 
 **What the numbers say:**
 
-1. **Precision is solid, and recall is limited by range.** On dev, the two collapses with a persistent help ring in a close camera view were caught 12–16 s after the person went down, with no false alerts anywhere in the run.
+1. **Precision is solid, and recall is limited by range.** On dev, the two collapses with a persistent help ring in a close camera view were caught 12–16 s after the person went down, with one false alert in the whole run.
 2. **The held-out run showed where it stops working.** Its incidents are spread across the whole floor, and the detector sees almost no one at those spots: 0–0.2 detections within 2 m per frame. Recall by apparent size, collapses only, across both runs:
 
 | A standing person at that spot appears (best camera) | Collapses caught |
@@ -197,7 +197,8 @@ How the dev result was reached. Each row is measured on `demo-s7`.
 | Fast-drop rule alone (any quick height drop becomes an incident) | 1/9 | 1/3 | 202 in 141 s |
 | Help ring opens incidents, plus the static clutter mask | 1/9 | 0/3 | 3 |
 | Plus barricade shadow; one zoomed frame can't dismiss a patient | 2/9 | 0/3 | 1 |
-| **Plus deep-fall zoom opening incidents for human review (final)** | **2/9** | **0/3** | **0** (12 sent to review) |
+| Plus deep-fall zoom opening incidents for human review | 2/9 | 0/3 | 0 (12 sent to review) |
+| **Plus a later help ring upgrading a review item to a full decision (final)** | **2/9** | **0/3** | **1** (11 sent to review) |
 | Final, but zoom-opened incidents dispatch EMTs directly | 3/9 | 0/3 | 10 |
 | Final, but the zoom opens incidents on a single look | 3/9 | 0/3 | 12 |
 | Final, without the look-closer tool at all | 2/9 | 0/3 | 1 |

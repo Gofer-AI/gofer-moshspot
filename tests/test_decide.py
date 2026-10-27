@@ -121,3 +121,18 @@ def test_second_nearby_alert_is_flagged_as_a_cluster():
             agent.add_ring("cam", t, np.array([5.0, 14.0]), 2, False)
         alerts += agent.step(t)
     assert [a["cluster"] is not None for a in alerts] == [False, True]
+
+
+def test_help_ring_upgrades_a_review_incident_to_an_alert():
+    evidence = SpotEvidence({"cam": CAMERA})
+    agent = IncidentAgent(evidence)
+    inc = agent.add_ring("cam", 5.0, np.array([0.0, 14.0]), 2, False)
+    inc.state, inc.source = "review", "zoom"  # as if the agent's zoomed looks had opened it
+    alerts = []
+    for t in frames(30, start=6.0):
+        evidence.add("cam", t, crowd(t) + helpers_around(0, 14))
+        if t == 10.0:
+            agent.add_ring("cam", t, np.array([0.2, 14.1]), 3, True)
+        alerts += agent.step(t)
+    assert len(alerts) == 1 and inc.state == "alerted"
+    assert "no longer just a review item" in [s for s in inc.trace if s["step"] == "help_ring"][-1]["note"]

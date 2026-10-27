@@ -958,9 +958,15 @@ function renderIncidents(){
     const t0=i.trace?.[0]?.t??0, team=[...(Array.isArray(i.trace)?i.trace:[])].filter(s=>s&&typeof s==='object').reverse().find(s=>s.step==='team_status');
     const cls=i.state==='alerted'?'t-pos':i.state==='closed'?'t-neg':'t-crush';
     const steps=(Array.isArray(i.trace)?i.trace:[]).filter(s=>s&&typeof s==='object').map(s=>`<div><span style="color:#8a91a3">+${((+s.t||0)-(+t0||0)).toFixed(1)}s</span> ${(STEP_TEXT[s.step]||(()=>esc(s.step)))(s)}</div>`).join('');
-    return `<details data-id="${esc(i.id)}" ${open.has(String(i.id))||i.state==='alerted'?'open':''}><summary><span class="tag ${cls}">${esc(i.priority||i.state)}</span> ${esc(i.id)} · ${esc(zoneOf(i.X,i.Y)||'?')} (${(+i.X).toFixed(1)}, ${(+i.Y).toFixed(1)})${i.cluster?' · <b style="color:#ffcf87">crush?</b>':''}${team?` · ${esc(team.team)} ${esc(team.status)}`:''}</summary><div class="trace">${steps}</div></details>`;
+    const review=i.state==='review'&&!reviewed.has(String(i.id))?`<button class="primary" data-dispatch="${esc(i.id)}" data-x="${+i.X}" data-y="${+i.Y}" style="margin:4px 0 2px 10px">Dispatcher: send nearest team</button>`:'';
+    return `<details data-id="${esc(i.id)}" ${open.has(String(i.id))||i.state==='alerted'||i.state==='review'?'open':''}><summary><span class="tag ${cls}">${esc(i.priority||i.state)}</span> ${esc(i.id)} · ${esc(zoneOf(i.X,i.Y)||'?')} (${(+i.X).toFixed(1)}, ${(+i.Y).toFixed(1)})${i.cluster?' · <b style="color:#ffcf87">crush?</b>':''}${team?` · ${esc(team.team)} ${esc(team.status)}`:''}</summary><div class="trace">${steps}</div>${review}</details>`;
   }).join('');
 }
+// A human dispatcher confirms a review item: the same POST /dispatch the worker uses, at MoshSpot's own location.
+const reviewed=new Set();
+$('msInc').addEventListener('click',e=>{const b=e.target.closest('button[data-dispatch]'); if(!b) return;
+  reviewed.add(b.dataset.dispatch); b.remove();
+  api('/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'dispatch',X:+b.dataset.x,Y:+b.dataset.y,incident_id:b.dataset.dispatch})});});
 setInterval(pollIncidents,1000);
 
 // ───────────────────────────── map
