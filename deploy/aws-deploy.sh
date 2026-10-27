@@ -54,6 +54,16 @@ AMI_GB=$(aws ec2 describe-images --image-ids "$AMI_ID" --output text \
   --query "Images[0].BlockDeviceMappings[?DeviceName=='$ROOT_DEV'].Ebs.VolumeSize | [0]")
 [[ "$AMI_GB" =~ ^[0-9]+$ ]] || AMI_GB=20
 VOLUME_GB=$(( AMI_GB > 20 ? AMI_GB : 20 ))
+# Dry-run the exact launch before creating anything: catches a missing Marketplace subscription, an instance type
+# the listing doesn't allow, and disk-size problems up front instead of halfway through.
+DRY=$(aws ec2 run-instances --dry-run --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --count 1 \
+  --block-device-mappings "DeviceName=$ROOT_DEV,Ebs={VolumeSize=$VOLUME_GB,VolumeType=gp3,Encrypted=true}" 2>&1 || true)
+case "$DRY" in
+  *DryRunOperation*) ;;
+  *OptInRequired*) die "not subscribed to this COOL AMI yet: accept the terms at the URL below, wait until AWS Marketplace shows the subscription as active, then rerun.
+$DRY" ;;
+  *) die "a test launch of $INSTANCE_TYPE from $AMI_ID failed: $DRY" ;;
+esac
 for m in yolo26n.onnx yolo26n-pose-dynamic.onnx; do [ -f "models/$m" ] || die "models/$m missing (run: bash tools/export_models.sh)"; done
 [ -f "runs/$RUN/gt.json" ] || die "runs/$RUN/gt.json missing"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "commit your changes first: the instance clones the exact pushed commit"
