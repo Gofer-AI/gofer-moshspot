@@ -54,6 +54,18 @@ AMI_GB=$(aws ec2 describe-images --image-ids "$AMI_ID" --output text \
   --query "Images[0].BlockDeviceMappings[?DeviceName=='$ROOT_DEV'].Ebs.VolumeSize | [0]")
 [[ "$AMI_GB" =~ ^[0-9]+$ ]] || AMI_GB=20
 VOLUME_GB=$(( AMI_GB > 20 ? AMI_GB : 20 ))
+# AWS "Free plan" accounts can only launch free-tier instance types and can't subscribe to paid Marketplace AMIs
+# (like COOL); the dry run below doesn't catch that, so check the plan explicitly.
+PLAN=$(aws freetier get-account-plan-state --query accountPlanType --output text 2>/dev/null || echo UNKNOWN)
+if [ "$PLAN" = FREE ]; then
+  ELIGIBLE=$(aws ec2 describe-instance-types --filters Name=free-tier-eligible,Values=true \
+    --query 'InstanceTypes[].InstanceType' --output text)
+  case " $ELIGIBLE " in
+    *" $INSTANCE_TYPE "*) ;;
+    *) die "this account is on the AWS Free plan, which can't launch $INSTANCE_TYPE or subscribe to COOL.
+   Upgrade it (Billing console -> Upgrade plan; remaining credits are kept) or pick one of: $ELIGIBLE" ;;
+  esac
+fi
 # Dry-run the exact launch before creating anything: catches a missing Marketplace subscription, an instance type
 # the listing doesn't allow, and disk-size problems up front instead of halfway through.
 DRY=$(aws ec2 run-instances --dry-run --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --count 1 \
