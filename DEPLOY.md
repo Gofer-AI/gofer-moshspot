@@ -43,7 +43,7 @@ deploy/aws-deploy.sh
 | `MODE=live` | judges' browsers drive the sim. `MODE=replay` loops `RUN` with no browser |
 | `DAYS=20` | EventBridge Scheduler **terminates the instance** (and deletes the Route 53 record, so the name can't dangle at a recycled IP) when time is up. An on-instance timer is the backup. Bucket objects expire 2 days later |
 
-**Rough cost for 20 days**, on-demand in us-east-1: about $40. That's c8g.large ≈ $38, the public IPv4 address ≈ $2.40, and 20 GB of gp3 ≈ $1. **Add COOL's hourly software fee** after its free trial (see your listing). Set `BUDGET_USD=60 BUDGET_EMAIL=you@…` to get an alert.
+**Rough cost for 20 days**, on-demand in us-east-1: about $40. That's c8g.large ≈ $38, the public IPv4 address ≈ $2.40, and the 50 GB gp3 root disk the COOL image requires ≈ $2.70. **Add COOL's hourly software fee** after its free trial (see your listing). Set `BUDGET_USD=60 BUDGET_EMAIL=you@…` to get an alert.
 
 **What the script locks down:**
 - **Access:** no SSH (no key pair; port 22 closed; use `aws ssm start-session`), and only 443/80 are open.

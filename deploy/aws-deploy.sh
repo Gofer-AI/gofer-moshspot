@@ -49,6 +49,11 @@ ARCH=$(aws ec2 describe-images --image-ids "$AMI_ID" --query 'Images[0].Architec
   || die "AMI $AMI_ID not found in $REGION (subscribe to COOL in AWS Marketplace and use its AMI id for this region)"
 [ "$ARCH" = "arm64" ] || die "AMI $AMI_ID is $ARCH; COOL on Graviton needs arm64"
 ROOT_DEV=$(aws ec2 describe-images --image-ids "$AMI_ID" --query 'Images[0].RootDeviceName' --output text)
+# the root disk can't be smaller than the AMI's snapshot (the COOL AMI's is 50 GB)
+AMI_GB=$(aws ec2 describe-images --image-ids "$AMI_ID" --output text \
+  --query "Images[0].BlockDeviceMappings[?DeviceName=='$ROOT_DEV'].Ebs.VolumeSize | [0]")
+[[ "$AMI_GB" =~ ^[0-9]+$ ]] || AMI_GB=20
+VOLUME_GB=$(( AMI_GB > 20 ? AMI_GB : 20 ))
 for m in yolo26n.onnx yolo26n-pose-dynamic.onnx; do [ -f "models/$m" ] || die "models/$m missing (run: bash tools/export_models.sh)"; done
 [ -f "runs/$RUN/gt.json" ] || die "runs/$RUN/gt.json missing"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "commit your changes first: the instance clones the exact pushed commit"
@@ -60,7 +65,7 @@ EXPIRES_ISO=$(python3 -c "import datetime as d;print((d.datetime.now(d.timezone.
 EXPIRES_SYSTEMD="$(echo "$EXPIRES_ISO" | tr T ' ') UTC"
 BUCKET="$NAME-deploy-$ACCOUNT-$REGION"
 PARAM="/$NAME/bridge-token"
-echo "account …${ACCOUNT: -4}  region $REGION  type $INSTANCE_TYPE  mode $MODE  fps $WORKER_FPS  expires ${EXPIRES_ISO}Z  commit ${REPO_SHA:0:7}"
+echo "account …${ACCOUNT: -4}  region $REGION  type $INSTANCE_TYPE  disk ${VOLUME_GB}GB  mode $MODE  fps $WORKER_FPS  expires ${EXPIRES_ISO}Z  commit ${REPO_SHA:0:7}"
 
 : > "$STATE"; chmod 600 "$STATE"
 save() { printf '%s=%q\n' "$1" "$2" >> "$STATE"; }
@@ -77,7 +82,7 @@ aws s3api put-public-access-block --bucket "$BUCKET" --public-access-block-confi
 aws s3api put-bucket-encryption --bucket "$BUCKET" --server-side-encryption-configuration \
   '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 aws s3api put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configuration \
-  "{\"Rules\":[{\"ID\":\"expire\",\"Status\":\"Enabled\",\"Filter\":{\"Prefix\":\"\"},\"Expiration\":{\"Days\":$((DAYS + 2))}}]}"
+  "{\"Rules\":[{\"ID\":\"expire\",\"Status\":\"Enabled\",\"Filter\":{\"Prefix\":\"\"},\"Expiration\":{\"Days\":$((DAYS + 2))}}]}" >/dev/null
 aws s3api put-bucket-tagging --bucket "$BUCKET" --tagging "{\"TagSet\":[{\"Key\":\"Project\",\"Value\":\"$NAME\"}]}"
 aws s3 cp --quiet models/yolo26n.onnx "s3://$BUCKET/models/yolo26n.onnx"
 aws s3 cp --quiet models/yolo26n-pose-dynamic.onnx "s3://$BUCKET/models/yolo26n-pose-dynamic.onnx"
@@ -132,7 +137,7 @@ grep -q "__[A-Z_]*__" "$UD" && die "user-data has unrendered placeholders"
 IID=$(aws ec2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" \
   --iam-instance-profile Name="$PROFILE" --security-group-ids "$SG" \
   --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1,HttpEndpoint=enabled \
-  --block-device-mappings "DeviceName=$ROOT_DEV,Ebs={VolumeSize=20,VolumeType=gp3,Encrypted=true,DeleteOnTermination=true}" \
+  --block-device-mappings "DeviceName=$ROOT_DEV,Ebs={VolumeSize=$VOLUME_GB,VolumeType=gp3,Encrypted=true,DeleteOnTermination=true}" \
   --instance-initiated-shutdown-behavior terminate \
   --user-data "file://$UD" \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=Project,Value=$NAME},{Key=ExpiresAt,Value=${EXPIRES_ISO}Z}]" \
