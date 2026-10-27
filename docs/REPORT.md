@@ -167,8 +167,14 @@ flowchart TD
 |---|---|---|---|---|---|---|
 | `demo-s7` (3 min) | dev: all tuning happened here | 9 (5 collapses, 3 crush victims, 1 slow lie-down) | **2/9** | **0/3** | **1** (20/h) | **14.1 s** after the person is down |
 | `eval-s7` (10 min) | first held-out run; became the diagnostic run | 8 (6 collapses, 2 slow lie-downs) | 0/8 | 1/19 | 3 (18/h) | — |
-| `eval-s11` (10 min) | fresh held-out run for perception v2 | *running* | | | | |
-| `soak-s7` (first 5 min) | look-alikes only: false-alarm rate for v2 | *running* | | | | |
+
+**Perception v2 (tested and rejected):** the full frame plus 3×3 tiles, at confidence 0.08, with the same frozen decision logic.
+
+| Run | Role | Real incidents | Recall | False alarms on look-alikes | Unmatched alerts |
+|---|---|---|---|---|---|
+| `demo-s7` (3 min) | dev | 9 | 3/9 | 1/3 | 16 (320/h) |
+| `eval-s11` (10 min) | fresh held-out run | 8 (6 collapses, 2 slow lie-downs) | 0/8 | 2/19 | 17 (102/h) |
+| `soak-s7` (first 5 min) | look-alikes only: 14 sits and crouches | 0 | — | 0/14 | 13 (156/h) |
 
 **What the numbers say:**
 
@@ -181,7 +187,7 @@ flowchart TD
 | 60–75 px | 0/2 |
 | < 60 px | 0/4 |
 
-So the rule for camera placement is: **every spot on the floor needs a camera in which a standing person is at least ~75 px tall**. With these 8–10 m masts that means one camera per ~12 m of floor, roughly twice the sim's four. Finer tiling (v2) buys range at 1.7× the compute per frame, which is exactly where Graviton + COOL efficiency matters.
+So the rule for camera placement is: **every spot on the floor needs a camera in which a standing person is at least ~75 px tall**. With these 8–10 m masts that means one camera per ~12 m of floor, roughly twice the sim's four. Finer tiling alone doesn't fix it. v2 found one more collapse on dev, none on the fresh held-out run, and raised 100–320 unmatched alerts per hour against about 20 for v1, at 1.7× the compute per frame. So v1 ships.
 
 **Where else it misses:**
 
@@ -235,7 +241,7 @@ The sim page's **MoshSpot incidents** panel shows the same trace step by step, a
 
 | Failure | What happens | Mitigation and next step |
 |---|---|---|
-| **Out of range** (a standing person is < ~75 px in every camera) | The detector sees almost no one there, so no ring and no incident | Camera placement rule (§6.2); finer tiling (v2); a detector fine-tuned on crowd footage |
+| **Out of range** (a standing person is < ~75 px in every camera) | The detector sees almost no one there, so no ring and no incident | Camera placement rule (§6.2); a detector fine-tuned on crowd footage. Finer tiling (v2) was tested and rejected: more false alerts, no held-out gain |
 | **Crush victims** without helpers | No ring forms | Cluster escalation after two alerts; next, a crowd-pressure layer (density × flow variance) |
 | **Slow lie-down** with no fall and no helpers | Missed | Add the PRD's 20 s immobility path for people seen lying |
 | **Same spot twice within 10 min** | The second incident is absorbed by the first | In a deployment the first is resolved by EMTs, which clears the spot |
