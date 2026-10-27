@@ -44,7 +44,8 @@ chown -R moshspot:moshspot "$APP/models" "$APP/runs"
 # ---- Python: COOL's interpreter if the AMI has it, else a venv with the stock OpenCV 5 wheel. Hash-pinned.
 PY=""
 for cand in /opt/cool/venvs/python_3.12/bin/python /opt/cool/venvs/*/bin/python; do
-  if [ -x "$cand" ] && "$cand" -c "import cv2" 2>/dev/null; then PY="$cand"; break; fi
+  # the worker needs OpenCV 5 (cv.dnn ENGINE_NEW); a COOL build older than that falls through to the stock wheel
+  if [ -x "$cand" ] && "$cand" -c "import sys, cv2; sys.exit(int(cv2.__version__.split('.')[0]) < 5)" 2>/dev/null; then PY="$cand"; break; fi
 done
 if [ -n "$PY" ]; then
   "$PY" -m pip install --quiet --require-hashes --no-deps -r "$APP/deploy/requirements.lock.txt"
