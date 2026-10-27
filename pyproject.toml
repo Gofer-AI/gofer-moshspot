@@ -1,0 +1,30 @@
+[project]
+name = "moshspot"
+version = "0.1.0"
+description = "Detects people who collapse in crowd-camera footage and dispatches the nearest EMT team."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=2.5.3",
+    "scipy>=1.18.1",
+]
+
+[project.optional-dependencies]
+local = [
+    "opencv-contrib-python==5.0.0.93",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["moshspot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

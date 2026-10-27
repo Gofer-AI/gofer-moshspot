@@ -40,6 +40,10 @@
   .hint{color:var(--dim);font-size:12px}
   .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-top:6px}
   .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+  #msInc{max-height:320px;overflow:auto}
+  #msInc details{border-bottom:1px solid #1a1e29;padding:4px 0}
+  #msInc summary{cursor:pointer;list-style:none}
+  #msInc .trace{font:11px ui-monospace,Menlo,monospace;padding:4px 0 2px 10px;color:#c3c9d6;line-height:1.6}
 </style>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
 </head>
@@ -71,6 +75,7 @@
         <span><i style="background:#6b7385"></i>crowd</span><span><i style="background:#ff4d5e"></i>down</span>
         <span><i style="background:#ffb547"></i>sit/crouch</span><span><i style="background:#4fd1c5"></i>helper</span>
         <span><i style="background:#5ad17a"></i>EMT post</span>
+        <span><i style="background:none;border:2px solid #ff4d5e;border-radius:0"></i>MoshSpot alert</span>
       </div>
     </div>
     <div class="card">
@@ -139,6 +144,10 @@
       </div>
       <div class="row"><button id="btnDispatch">Dispatch nearest team to latest incident</button></div>
       <div class="hint">MoshSpot drives this with <code>POST /dispatch</code>; read team status from <code>GET /emt</code>.</div>
+    </div>
+    <div class="card">
+      <h2>MoshSpot incidents (worker → <code>POST /incidents</code>)</h2>
+      <div id="msInc"><span class="hint">Waiting for the MoshSpot worker…</span></div>
     </div>
     <div class="card">
       <h2>Ground-truth incidents</h2>
@@ -918,6 +927,40 @@ function recordTick(){
   }
 }
 
+// ───────────────────────────── MoshSpot incidents (the worker publishes them to POST /incidents)
+let msIncidents=[];
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function pollIncidents(){
+  if(!bridge) return;
+  try{const r=await api('/incidents',{cache:'no-store'}); if(r.ok){msIncidents=(await r.json()).incidents||[]; renderIncidents();}}catch{}
+}
+const STEP_TEXT={
+  fall_seen:s=>`fall seen on ${esc(s.camera)} (height ratio −${esc(s.height_drop)})`,
+  help_ring:s=>`${esc(s.helpers)} people crouching around the spot on ${esc(s.camera)}${s.arm_up?', one with an arm up':''}`,
+  corroborated:s=>`also seen on ${esc(s.camera)}`,
+  spot_evidence:s=>`checked the centre: ${Object.entries(s.views||{}).map(([c,v])=>`${esc(c)} standing ${esc(v.standing)}, lying ${esc(v.lying)}`).join('; ')||'no view'}`,
+  look_closer:s=>s.found?`looked closer (${esc(s.found.zoom)}× zoom on ${esc(s.camera)}): ${s.found.lying?'a person lying':s.found.standing?'a person standing':s.found.sitting?'a person sitting':'no one clear'}`:`looked closer on ${esc(s.camera)}: no frame`,
+  close:s=>`closed: ${esc(s.reason)}`,
+  alert:s=>`<b style="color:#ff9aa5">ALERT ${esc(s.priority)}</b>`,
+  cluster:s=>`<b style="color:#ffcf87">several people down close together (${(s.with_incidents||[]).map(esc).join(', ')}): possible crowd crush</b>`,
+  rank_teams:s=>`ranked teams by walking time: ${(s.ranking||[]).slice(0,3).map(r=>`${esc(r.team)} ${esc(r.eta_s)} s`).join(', ')}`,
+  dispatch_team:s=>`dispatched ${esc(s.team)} (walk ${esc(s.eta_s)} s)`,
+  team_status:s=>`${esc(s.team)} ${esc(s.status)}${s.response_s!=null?` · ${esc(s.response_s)} s after dispatch`:''}`,
+  escalate:s=>`escalated: ${esc(s.reason)}`,
+};
+function renderIncidents(){
+  const el=$('msInc'); if(!el) return;
+  if(!msIncidents.length){el.innerHTML='<span class="hint">No incidents from MoshSpot yet.</span>';return;}
+  const open=new Set([...el.querySelectorAll('details[open]')].map(d=>d.dataset.id));
+  el.innerHTML=msIncidents.slice().reverse().map(i=>{
+    const t0=i.trace?.[0]?.t??0, team=[...(i.trace||[])].reverse().find(s=>s.step==='team_status');
+    const cls=i.state==='alerted'?'t-pos':i.state==='closed'?'t-neg':'t-crush';
+    const steps=(i.trace||[]).map(s=>`<div><span style="color:#8a91a3">+${(s.t-t0).toFixed(1)}s</span> ${(STEP_TEXT[s.step]||(()=>esc(s.step)))(s)}</div>`).join('');
+    return `<details data-id="${esc(i.id)}" ${open.has(String(i.id))||i.state==='alerted'?'open':''}><summary><span class="tag ${cls}">${esc(i.priority||i.state)}</span> ${esc(i.id)} · ${esc(zoneOf(i.X,i.Y)||'?')} (${(+i.X).toFixed(1)}, ${(+i.Y).toFixed(1)})${i.cluster?' · <b style="color:#ffcf87">crush?</b>':''}${team?` · ${esc(team.team)} ${esc(team.status)}`:''}</summary><div class="trace">${steps}</div></details>`;
+  }).join('');
+}
+setInterval(pollIncidents,1000);
+
 // ───────────────────────────── map
 const mapC=$('map'), mctx=mapC.getContext('2d');
 let mapT=null;
@@ -954,6 +997,8 @@ function drawMap(){
   for(const e of VENUE.emt_posts){const[u,v]=to(e.X,e.Y);g.fillStyle='#5ad17a';g.fillRect(u-4,v-1.5,8,3);g.fillRect(u-1.5,v-4,3,8);g.font=`${8*s/4}px sans-serif`;g.fillText(e.id,u+6,v+3);}
   for(const inc of incidents){ if(!inc.should_alert||inc.t_recover||inc.type==='crush_cluster')continue;
     const[u,v]=to(inc.X,inc.Y),p=1+.5*Math.sin(simT*6);g.strokeStyle='#ff4d5e';g.lineWidth=1.5;g.beginPath();g.arc(u,v,(5+3*p)*s/4,0,7);g.stroke();}
+  for(const i of msIncidents){const[u,v]=to(+i.X,+i.Y),c=i.state==='alerted'?'#ff4d5e':i.state==='closed'?'#6b7385':'#ffb547';
+    g.strokeStyle=c;g.lineWidth=2;g.strokeRect(u-7*s/4,v-7*s/4,14*s/4,14*s/4);g.fillStyle=c;g.font=`${8*s/4}px sans-serif`;g.fillText(String(i.id),u+8*s/4,v-6*s/4);}
   if(surge&&simT<surge.until){const[u,v]=to(surge.cx,surge.cy);g.strokeStyle='#ffb547';g.setLineDash([4,3]);g.beginPath();g.arc(u,v,6*s,0,7);g.stroke();g.setLineDash([]);}
 }
 function nearestAgent(X,Y,maxD=2.5){let best=null,bd=maxD;for(const a of A){if(a.fixed||a.mode==='help'||a.emt||a.hidden)continue;const d=Math.hypot(a.x-X,a.y-Y);if(d<bd){bd=d;best=a;}}return best;}

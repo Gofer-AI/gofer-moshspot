@@ -19,6 +19,10 @@ Dispatch loop (MoshSpot -> sim EMT teams walk to the patient):
        action: dispatch | accept | resolve | false_alarm | cancel  (team optional on dispatch = nearest free)
   GET  /emt?after=N   team status events from the sim: dispatched, accepted, en_route, on_scene, resolved, ...
 
+MoshSpot's incidents (shown in the page's "MoshSpot incidents" panel and on the map):
+  POST /incidents {"incidents": [...]}   the worker publishes its current incidents and agent traces
+  GET  /incidents                         the page reads them
+
 Auth: when a token is set, every endpoint except the page itself and /status needs it, as
 "Authorization: Bearer <token>", "X-MoshSpot-Token: <token>", or "?token=<token>" (for MJPEG URLs).
 The page picks it up from its URL fragment: https://host/#token=<token>.
@@ -53,6 +57,7 @@ class Config:
     max_gt_bytes: int = 32 << 20         # gt.json at the end of a run
     max_gt_frame_bytes: int = 1 << 20    # one line of gt_frames.jsonl
     max_json_bytes: int = 64 << 10       # dispatch commands, EMT events
+    max_incidents_bytes: int = 1 << 20   # the worker's incident snapshot, traces included
     max_cams: int = 16
     max_teams: int = 64
     max_streams: int = 32                # concurrent MJPEG viewers
@@ -68,6 +73,7 @@ class State:
     commands: deque = None
     events: deque = None
     teams: dict = field(default_factory=dict)
+    incidents: bytes = b'{"incidents": []}'
     last_cmd: int = 0
     last_event: int = 0
     streams: threading.BoundedSemaphore = None
@@ -229,6 +235,16 @@ class Handler(SimpleHTTPRequestHandler):
                 st.teams[ev["team"]] = ev
             return self._send(204)
 
+        if u.path == "/incidents":
+            body = self._body(cfg.max_incidents_bytes)
+            if body is None:
+                return
+            snapshot = _json(body)
+            if snapshot is None or not isinstance(snapshot.get("incidents"), list):
+                return self._err(400, 'body must be {"incidents": [...]}')
+            st.incidents = body
+            return self._send(204)
+
         if parts[0] in ("gt", "gt-frames") and len(parts) == 1:
             if not run:
                 return self._err(400 if cfg.record else 403, "run required" if cfg.record else "recording is disabled; start the bridge with --record")
@@ -266,6 +282,8 @@ class Handler(SimpleHTTPRequestHandler):
             with st.lock:
                 return self._send(200, json.dumps({"teams": st.teams, "events": [e for e in st.events if e["seq"] > after],
                                                    "last": st.last_event}).encode())
+        if u.path == "/incidents":
+            return self._send(200, st.incidents)
         if u.path == "/cams":
             return self._send(200, json.dumps({"cams": sorted(st.latest)}).encode())
         m = re.match(r"^/mjpeg/([A-Za-z0-9_.-]+)$", u.path)

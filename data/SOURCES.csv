@@ -1,0 +1,3 @@
+name,url,licence,downloaded,notes
+OpenCV sample vtest.avi,https://raw.githubusercontent.com/opencv/opencv/4.x/samples/data/vtest.avi,Distributed with OpenCV samples/data,2026-10-03,Pedestrians seen from an elevated camera; 768x576 at 10 fps
+UR Fall Detection fall-01-cam0 and cam1,https://fenix.ur.edu.pl/~mkepski/ds/uf.html,CC BY-NC-SA 4.0 (non-commercial academic use),2026-10-03,Depth|RGB side by side at 640x240; RGB is the right half. Cite Kwolek & Kepski 2014

@@ -58,8 +58,34 @@ If COOL installs its own Python, use that interpreter everywhere below; the list
 ```bash
 sudo useradd --system --create-home --home-dir /opt/moshspot --shell /usr/sbin/nologin moshspot
 sudo -u moshspot git clone https://github.com/Gofer-AI/gofer-moshspot /opt/moshspot/sim
-sudo -u moshspot mkdir -p /opt/moshspot/sim/runs
-# plus the MoshSpot worker repo, e.g. /opt/moshspot/worker
+sudo -u moshspot mkdir -p /opt/moshspot/sim/runs /opt/moshspot/sim/models
+```
+
+**The worker lives in the same repo (`moshspot/`).** Install it into COOL's Python, so it runs on COOL's `cv2` build. The path below comes from the Graviton4 listing's usage notes; use whatever path your listing gives.
+
+Install the worker without its pip OpenCV wheel, then install scipy:
+
+```bash
+sudo /opt/cool/venvs/python_3.12/bin/python -m pip install --no-deps -e /opt/moshspot/sim
+sudo /opt/cool/venvs/python_3.12/bin/python -m pip install "scipy>=1.18"
+```
+
+Check that it picks up COOL's OpenCV 5:
+
+```bash
+/opt/cool/venvs/python_3.12/bin/python -c "import cv2, moshspot.worker; print(cv2.__version__)"
+```
+
+**Models.** The ONNX models are portable, so export them on a laptop (`bash tools/export_models.sh`) and copy them up. From the laptop:
+
+```bash
+aws s3 cp --recursive models/ s3://<bucket>/models/ --exclude "*.pt"
+```
+
+On the instance:
+
+```bash
+sudo -u moshspot aws s3 cp --recursive s3://<bucket>/models/ /opt/moshspot/sim/models/
 ```
 
 ## 5. Create the token
@@ -105,7 +131,40 @@ TOKEN = os.environ["MOSHSPOT_TOKEN"]
 cap = cv.VideoCapture(f"http://127.0.0.1:8780/mjpeg/CAM-1?token={TOKEN}")
 requests.post("http://127.0.0.1:8780/dispatch", json={...}, headers={"Authorization": f"Bearer {TOKEN}"})
 ```
-Give the worker its own `moshspot-worker.service` with `EnvironmentFile=/etc/moshspot/bridge.env` and the worker's start command.
+The worker gets its own service, `/etc/systemd/system/moshspot-worker.service`. It needs a calibration file: any recorded run's `gt.json` at the same resolution works, because the cameras are fixed.
+
+```ini
+[Unit]
+Description=MoshSpot worker (OpenCV 5 / COOL)
+After=moshspot-bridge.service
+Wants=moshspot-bridge.service
+
+[Service]
+User=moshspot
+EnvironmentFile=/etc/moshspot/bridge.env
+WorkingDirectory=/opt/moshspot/sim
+# Live sim: watch the bridge's MJPEG streams and dispatch the sim's EMT teams.
+# For the always-on demo with no browser, add: --replay /opt/moshspot/sim/runs/<run>
+ExecStart=/opt/cool/venvs/python_3.12/bin/python -m moshspot.worker --bridge http://127.0.0.1:8780 --calibration /opt/moshspot/sim/runs/<run>/gt.json --out /opt/moshspot/sim/runs/live
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/moshspot/sim/runs
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable it, then follow its log:
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now moshspot-worker
+journalctl -u moshspot-worker -f     # "watching CAM-1, CAM-2, CAM-3, CAM-4", then help rings, ALERT and dispatch lines
+```
+
+Alerts go to `runs/live/alerts.jsonl`, and the agent's step-by-step traces to `runs/live/traces.jsonl`.
 
 ## 7. HTTPS with Caddy
 Install Caddy from its official apt repository (follow the Debian/Ubuntu steps at caddyserver.com/docs/install). Then set `/etc/caddy/Caddyfile`:
@@ -163,7 +222,31 @@ Record runs locally (`python3 bridge.py --record`, then **Record run** in the pa
 aws s3 sync runs/demo-s7-20261025220245 s3://<bucket>/runs/demo-s7-20261025220245     # from your laptop
 aws s3 sync s3://<bucket>/runs/demo-s7-20261025220245 /opt/moshspot/sim/runs/demo-s7-20261025220245   # on the instance
 ```
-Point the worker's replay mode at `runs/<run>/CAM-n/%06d.jpg`, at the `fps` in that run's `gt.json`.
+Point the worker at the run with `--replay runs/<run>`. It loops all four cameras at real speed, timed by the `fps` in that run's `gt.json`.
+
+## 10b. COOL benchmark (Best Use of COOL award)
+
+Run the same benchmark on each configuration and commit the JSON files it writes to `eval/results/`:
+
+| Configuration | Interpreter |
+|---|---|
+| c8g + COOL | COOL's Python |
+| c8g + stock OpenCV | a plain venv with `pip install opencv-python==5.0.0.93` |
+| c7i (x86) + stock OpenCV | the laptop or an x86 instance |
+
+On c8g with COOL, for example:
+
+```bash
+cd /opt/moshspot/sim && /opt/cool/venvs/python_3.12/bin/python tools/benchmark_cool.py runs/<run> --frames 60 \
+    --price-per-hour <c8g.xlarge on-demand + COOL fee> --label c8g-cool
+```
+
+Each file records:
+
+- per-stage milliseconds: decode, imgproc, tiled detection, full perception;
+- cameras at 5 fps per instance;
+- $ per camera-hour;
+- the KleidiCV/HAL lines from `cv2.getBuildInformation()`, which prove which build ran.
 
 ## OpenCV fallback
 If the COOL listing for your instance doesn't ship OpenCV 5 yet, stay on Graviton and install the `opencv-python` 5.x aarch64 wheel in a virtualenv for the worker. Benchmark both if you're entering the COOL award: the award is for *using* COOL, so keep the COOL build wherever its version is enough.
@@ -176,6 +259,5 @@ You pay EC2 on-demand for the instance, plus the COOL hourly software fee after 
 ```
 
 ## Not covered here
-- The worker's own build and config (it lives in its own repo).
-- CloudWatch logs and alarms.
+- CloudWatch logs and alarms (the services log to journald; the CloudWatch agent can ship them).
 - Autoscaling, and multiple simultaneous live sims (that needs per-session camera IDs in the bridge).

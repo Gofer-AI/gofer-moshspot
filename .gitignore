@@ -1,3 +1,10 @@
 runs/
 __pycache__/
 .DS_Store
+.venv/
+.export-env/
+.pytest_cache/
+models/
+outputs/
+data/*
+!data/SOURCES.csv
