@@ -34,6 +34,8 @@ HOSTED_ZONE_ID=<Route 53 zone, optional: creates the A record> \
 deploy/aws-deploy.sh
 ```
 
+**DNS on Vercel (goferai.space):** leave `HOSTED_ZONE_ID` unset. The script ends by printing the record to add: type `A`, name `moshspot`, value = the instance IP, TTL 60. Add it under Vercel → Domains → goferai.space → DNS Records, or run `vercel dns add goferai.space moshspot A <IP>`. **Delete it when the demo ends:** the AWS expiry can't reach Vercel, and a record left pointing at a released IP can be taken over.
+
 | Default | Why |
 |---|---|
 | `INSTANCE_TYPE=c8g.large` (2 vCPU / 4 GB, Graviton4) | the smallest size that runs the worker; if `journalctl -u moshspot-worker` shows it falling behind, redeploy with `c8g.xlarge` |

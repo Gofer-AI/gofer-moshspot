@@ -50,5 +50,10 @@ fi
 if [ -n "${BUCKET:-}" ]; then
   step "bucket $BUCKET"; aws s3 rm --quiet --recursive "s3://$BUCKET" 2>/dev/null; aws s3api delete-bucket --bucket "$BUCKET" 2>/dev/null
 fi
+if [ -n "${DNS_MANUAL:-}" ]; then
+  read -r APEX SUB <<< "$DNS_MANUAL"
+  echo "!! Now delete the DNS record you added: $SUB.$APEX (A). Vercel: Domains -> $APEX -> DNS Records,"
+  echo "   or: vercel dns ls $APEX  then  vercel dns rm <record id>"
+fi
 rm -f "$STATE" "deploy/judge-link-$NAME.txt" "deploy/judge-qr-$NAME.png"
 step "done"

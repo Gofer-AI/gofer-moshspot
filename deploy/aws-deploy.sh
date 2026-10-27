@@ -10,7 +10,8 @@
 #   RUN             a recorded run in runs/ (its gt.json is the camera calibration; replay mode also uses its frames)
 # Optional:
 #   AWS_REGION      default: the CLI's configured region, else us-east-1
-#   HOSTED_ZONE_ID  Route 53 zone for DOMAIN: the script creates the A record and schedules its deletion
+#   HOSTED_ZONE_ID  Route 53 zone for DOMAIN: the script creates the A record and schedules its deletion.
+#                   Without it (e.g. DNS on Vercel, like goferai.space) the script prints the record to add.
 #   INSTANCE_TYPE   default c8g.large (2 vCPU / 4 GB). c8g.xlarge if the worker can't keep up (see DEPLOY.md)
 #   WORKER_FPS      frames per second per camera the worker analyses (default 1)
 #   MODE            live (judges' browsers drive the sim; default) | replay (loop RUN, no browser needed)
@@ -191,8 +192,21 @@ cat <<EOF
 URL         https://$DOMAIN   (HTTPS comes up once DNS points at $IP; bootstrap takes ~5-10 min)
 judge link  in $LINK (and deploy/judge-qr-$NAME.png if qrencode is installed). Share it privately with judges only.
 expires     ${EXPIRES_ISO}Z (instance terminated by EventBridge Scheduler; bucket objects expire 2 days later)
-DNS         $( [ -n "${HOSTED_ZONE_ID:-}" ] && echo "created" || echo "add an A record: $DOMAIN -> $IP" )
+DNS         $( [ -n "${HOSTED_ZONE_ID:-}" ] && echo "created in Route 53 (deleted automatically at expiry)" || echo "ADD IT NOW (see below)" )
 logs        aws ssm start-session --target $IID   then: sudo tail -f /var/log/moshspot-bootstrap.log; journalctl -u moshspot-worker -f
 check       curl -s https://$DOMAIN/status
 remove all  deploy/aws-teardown.sh
 EOF
+if [ -z "${HOSTED_ZONE_ID:-}" ]; then
+  APEX=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}'); SUB="${DOMAIN%."$APEX"}"
+  save DNS_MANUAL "$APEX $SUB"
+  cat <<EOF
+
+DNS is not in Route 53, so add this record yourself (Caddy keeps retrying the certificate until it resolves):
+  type A   name $SUB   value $IP   TTL 60      (on $APEX)
+  Vercel dashboard: Domains -> $APEX -> DNS Records -> Add
+  or Vercel CLI:    vercel login && vercel dns add $APEX $SUB A $IP
+!! Delete this record when the demo ends (${EXPIRES_ISO}Z) or when you tear down: a record left pointing at a
+   released AWS IP can be taken over by whoever gets that IP next.
+EOF
+fi
