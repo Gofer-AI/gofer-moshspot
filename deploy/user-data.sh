@@ -19,7 +19,8 @@ APP=/opt/moshspot/sim
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y --no-install-recommends caddy git python3-venv unattended-upgrades
+# libgl1 + libglib2.0: the stock opencv-contrib-python wheel (fallback when there's no COOL Python) links against them
+apt-get install -y --no-install-recommends caddy git python3-venv unattended-upgrades libgl1 libglib2.0-0t64
 snap install aws-cli --classic >/dev/null 2>&1 || true
 AWS=$(command -v aws || echo /snap/bin/aws)
 
