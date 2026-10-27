@@ -49,7 +49,7 @@ flowchart LR
     D[Dispatcher<br/>walking-time routing,<br/>ack timer, escalation]
   end
   B[bridge.py<br/>MJPEG out, dispatch in]
-  E[EMT teams<br/>sim or phone app]
+  E[EMT teams<br/>simulated in MoshSpot Sim]
   C1 -->|JPEG frames| B -->|MJPEG| I --> P --> T --> A
   P --> R --> A
   A -->|alert| D -->|POST /dispatch| B --> E
@@ -129,11 +129,11 @@ flowchart TD
 **Guardrails (in code, `moshspot/decide.py`):**
 
 - An incident closes only on persistent visual evidence of someone standing at the centre.
-- A single zoomed frame can confirm a closure, or reveal someone lying and so force an alert. It can never dismiss a patient on its own; there's a test for this.
+- A single zoomed frame can confirm a closure, or reveal someone lying and so force an alert. It can never dismiss a patient on its own. When it tries, the trace records a `guardrail` step, and there's a test for this.
 - With no evidence either way, the agent alerts.
 - The dispatcher escalates if a team doesn't accept within 45 s.
 
-**Observability:** every step is written to the incident's trace (`traces.jsonl`): `fall_seen → help_ring → spot_evidence → look_closer → close | alert → cluster → rank_teams → dispatch_team → team_status → escalate`. A real trace from the dev run is in §6.4.
+**Observability:** every step is written to the incident's trace (`traces.jsonl`): `fall_seen → help_ring → spot_evidence → look_closer → guardrail → close | alert | request_human_review → cluster → rank_teams → dispatch_team → team_status → escalate`. A real trace from the dev run is in §6.4.
 
 ## 5. AWS deployment
 

@@ -1,5 +1,7 @@
 # MoshSpot — Win Strategy, Evidence Checklists, Schedule
 
+> **Planning document, written 2026-10-03.** What we actually built and measured is in [REPORT.md](REPORT.md); where they differ, the report is current.
+
 **Companion docs:** [PRD.md](PRD.md) · [SHOOT_PLAN.md](SHOOT_PLAN.md)
 **Roles:** **A** = CV + evaluation · **B** = agent, cloud, UI, video. If the team is solo, see §5.3.
 

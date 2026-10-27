@@ -104,7 +104,9 @@ def test_one_zoomed_frame_cannot_dismiss_a_patient():
     zoom = lambda camera_id, x, y, t: {"standing": True, "lying": False}  # a neighbour in the zoomed crop
     agent, alerts = run_agent(lambda t: helpers_around(0, 14), look_closer=zoom)
     assert len(alerts) == 1
-    assert [s["step"] for s in agent.incidents[0].trace][-2:] == ["look_closer", "alert"]
+    trace = agent.incidents[0].trace
+    assert [s["step"] for s in trace][-3:] == ["look_closer", "guardrail", "alert"]
+    assert "can't dismiss" in trace[-2]["rule"]
 
 
 def test_second_nearby_alert_is_flagged_as_a_cluster():

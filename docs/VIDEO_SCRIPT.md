@@ -15,6 +15,19 @@
    The first collapse happens about 12 s in, and MoshSpot's alert lands 12–16 s after the person goes down.
 4. Record the whole 3-minute run once, then cut it.
 
+**Make the demo reliable.** MoshSpot catches a collapse when a standing person at that spot looks at least ~75 px tall in some camera (report §6.2). The scripted demo's first collapse (Pit Left, near CAM-1) meets that. For more collapses on camera:
+
+1. Choose **Sandbox (manual)** and **click → Collapse (stays down)**.
+2. Click a person in the **lower half of a camera tile** (CAM-3's lower half works well), so they're close to that camera.
+3. Wait about 20 s, for the helpers to gather plus the 13 s decision delay.
+
+**Look-alike shots:**
+
+- For the "doesn't overreact" shot, use **Sit down** or **Crouch & recover**.
+- For the agent closing an incident on its own, use **Collapse, gets up**.
+
+Don't run anything heavy alongside the worker. It needs the CPU to keep up with four 5 fps streams.
+
 | Time | Picture | Narration (say roughly this) |
 |---|---|---|
 | 0:00–0:20 | White text on black, one line at a time: "Astroworld, Nov 5, 2021", then "9:30 pm: 'people are going down'", then "9:32 pm: a fan climbs a camera platform and begs the operator for help", then "The show goes on for 40 more minutes. Ten people die." | (silent, or a single line) "The cameras were already pointed at the crowd. Nobody was watching them for people going down." |

@@ -947,6 +947,8 @@ const STEP_TEXT={
   dispatch_team:s=>`dispatched ${esc(s.team)} (walk ${esc(s.eta_s)} s)`,
   team_status:s=>`${esc(s.team)} ${esc(s.status)}${s.response_s!=null?` · ${esc(s.response_s)} s after dispatch`:''}`,
   escalate:s=>`escalated: ${esc(s.reason)}`,
+  guardrail:s=>`<span style="color:#ffcf87">guardrail: ${esc(s.rule)}</span> (${esc(s.detail)})`,
+  request_human_review:s=>`<span style="color:#ffcf87">sent to a dispatcher for review:</span> ${esc(s.reason)}`,
 };
 function renderIncidents(){
   const el=$('msInc'); if(!el) return;

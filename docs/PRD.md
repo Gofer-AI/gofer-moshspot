@@ -1,5 +1,7 @@
 # MoshSpot — Product Requirements Document
 
+> **Planning document, written 2026-10-03.** What we actually built and measured is in [REPORT.md](REPORT.md); where they differ, the report is current.
+
 **Status:** Draft v0.1 for team review · **Date:** 2026-10-03
 **Competition:** OpenCV AI Competition 2026, powered by AWS · **Deadline:** Mon 2026-10-26, 11:45 pm PDT
 **Companion docs:** [STRATEGY.md](STRATEGY.md) (rubric, awards, schedule, video) · [SHOOT_PLAN.md](SHOOT_PLAN.md) (footage)

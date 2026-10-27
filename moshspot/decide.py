@@ -378,6 +378,9 @@ class IncidentAgent:
                 # one zoomed frame can confirm what the last 2 s suggest, or reveal someone lying,
                 # but it can't dismiss a patient on its own
                 lying = closer["lying"]
+                if closer["standing"] and not standing and seen_standing < 0.25:
+                    inc.log(t, "guardrail", rule="one zoomed frame can't dismiss a patient",
+                            detail=f"the zoom showed someone standing, but they stood there in only {seen_standing:.0%} of the last 2 s")
                 standing = standing or (closer["standing"] and seen_standing >= 0.25)
         if standing and not lying:
             inc.state = "closed"
