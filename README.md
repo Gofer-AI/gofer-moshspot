@@ -12,6 +12,7 @@ It's Gofer AI's entry to the [OpenCV AI Competition 2026](https://opencv26.devpo
 
 | | |
 |---|---|
+| **Judges: how to test it** (live demo, things to try, run it yourself) | [docs/JUDGES.md](docs/JUDGES.md) |
 | **Technical report** (architecture, OpenCV 5 implementation, agent, AWS, evaluation, limitations) | [docs/REPORT.md](docs/REPORT.md) |
 | Problem statement and PRD | [docs/PRD.md](docs/PRD.md) |
 | Dev log: measured findings | [docs/DEVLOG.md](docs/DEVLOG.md) |
