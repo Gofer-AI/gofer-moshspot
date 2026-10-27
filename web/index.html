@@ -45,7 +45,7 @@
   #msInc summary{cursor:pointer;list-style:none}
   #msInc .trace{font:11px ui-monospace,Menlo,monospace;padding:4px 0 2px 10px;color:#c3c9d6;line-height:1.6}
 </style>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"},"integrity":{"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js":"sha384-61S/Nu32S3E5+n+KpCOTb2eRYps6fVKm+9Gz1QBvSePFthb46f063Aa/qe/lykFZ"}}</script>
 </head>
 <body>
 <header>
@@ -168,6 +168,7 @@ const TOKEN=(()=>{
   if(m) history.replaceState(null,'',location.pathname+location.search);
   return t;
 })();
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); // for anything from the bridge
 const authHeaders=()=>TOKEN?{Authorization:`Bearer ${TOKEN}`}:{};
 const api=(path,opts={})=>fetch(path,{...opts,headers:{...(opts.headers||{}),...authHeaders()}});
 
@@ -749,8 +750,8 @@ async function pollCommands(){
 function renderTeams(){
   const el=$('teams'); if(!el) return;
   const col={available:'#5ad17a',dispatched:'#ffb547',en_route:'#ffb547',on_scene:'#ff4d5e',returning:'#8a91a3'};
-  el.innerHTML=teams.map(t=>`<div><b style="color:${col[t.status]}">●</b> ${t.id} <span style="color:#8a91a3">${t.post.name}</span> — ${t.status.replace('_',' ')}${t.job?` → ${t.job.ext??t.job.sim_incident??'manual'}`:''}</div>`).join('')+
-    (emtLog.length?`<div class="hint" style="margin-top:4px">${emtLog.slice(-3).reverse().map(e=>`${e.clock} ${e.team} ${e.status}`).join('<br>')}</div>`:'');
+  el.innerHTML=teams.map(t=>`<div><b style="color:${col[t.status]}">●</b> ${t.id} <span style="color:#8a91a3">${t.post.name}</span> — ${t.status.replace('_',' ')}${t.job?` → ${esc(t.job.ext??t.job.sim_incident??'manual')}`:''}</div>`).join('')+
+    (emtLog.length?`<div class="hint" style="margin-top:4px">${emtLog.slice(-3).reverse().map(e=>`${esc(e.clock)} ${esc(e.team)} ${esc(e.status)}`).join('<br>')}</div>`:'');
 }
 
 // ───────────────────────────── scenarios
@@ -929,10 +930,9 @@ function recordTick(){
 
 // ───────────────────────────── MoshSpot incidents (the worker publishes them to POST /incidents)
 let msIncidents=[];
-const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function pollIncidents(){
   if(!bridge) return;
-  try{const r=await api('/incidents',{cache:'no-store'}); if(r.ok){msIncidents=(await r.json()).incidents||[]; renderIncidents();}}catch{}
+  try{const r=await api('/incidents',{cache:'no-store'}); if(r.ok){const d=await r.json(); msIncidents=(Array.isArray(d.incidents)?d.incidents:[]).filter(i=>i&&typeof i==='object'); renderIncidents();}}catch{}
 }
 const STEP_TEXT={
   fall_seen:s=>`fall seen on ${esc(s.camera)} (height ratio −${esc(s.height_drop)})`,
@@ -955,9 +955,9 @@ function renderIncidents(){
   if(!msIncidents.length){el.innerHTML='<span class="hint">No incidents from MoshSpot yet.</span>';return;}
   const open=new Set([...el.querySelectorAll('details[open]')].map(d=>d.dataset.id));
   el.innerHTML=msIncidents.slice().reverse().map(i=>{
-    const t0=i.trace?.[0]?.t??0, team=[...(i.trace||[])].reverse().find(s=>s.step==='team_status');
+    const t0=i.trace?.[0]?.t??0, team=[...(Array.isArray(i.trace)?i.trace:[])].filter(s=>s&&typeof s==='object').reverse().find(s=>s.step==='team_status');
     const cls=i.state==='alerted'?'t-pos':i.state==='closed'?'t-neg':'t-crush';
-    const steps=(i.trace||[]).map(s=>`<div><span style="color:#8a91a3">+${(s.t-t0).toFixed(1)}s</span> ${(STEP_TEXT[s.step]||(()=>esc(s.step)))(s)}</div>`).join('');
+    const steps=(Array.isArray(i.trace)?i.trace:[]).filter(s=>s&&typeof s==='object').map(s=>`<div><span style="color:#8a91a3">+${((+s.t||0)-(+t0||0)).toFixed(1)}s</span> ${(STEP_TEXT[s.step]||(()=>esc(s.step)))(s)}</div>`).join('');
     return `<details data-id="${esc(i.id)}" ${open.has(String(i.id))||i.state==='alerted'?'open':''}><summary><span class="tag ${cls}">${esc(i.priority||i.state)}</span> ${esc(i.id)} · ${esc(zoneOf(i.X,i.Y)||'?')} (${(+i.X).toFixed(1)}, ${(+i.Y).toFixed(1)})${i.cluster?' · <b style="color:#ffcf87">crush?</b>':''}${team?` · ${esc(team.team)} ${esc(team.status)}`:''}</summary><div class="trace">${steps}</div></details>`;
   }).join('');
 }

@@ -5,6 +5,11 @@ __pycache__/
 .export-env/
 .pytest_cache/
 models/
+.env
+*.env
+deploy/.state-*
+deploy/judge-link*.txt
+deploy/judge-qr*.png
 outputs/
 data/*
 !data/SOURCES.csv

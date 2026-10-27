@@ -21,6 +21,11 @@ from moshspot.ingest.ring_buffer import RingBuffer
 
 log = logging.getLogger(__name__)
 
+
+def redact(source):
+    """Source for logs: drop the query string, which may carry the bridge token (?token=...)."""
+    return str(source).split("?", 1)[0]
+
 STREAM_TIMEOUT_MS = 5000
 CADENCE_TOLERANCE = 1e-3  # s; absorbs float error and small timestamp jitter
 HEALTH_WINDOW = 2.0       # s of recent frames used to measure fps
@@ -212,7 +217,7 @@ class LiveCamera:
             finally:
                 cap.release()
             if duration is None:
-                raise OSError(f"no frames in {self.source}")
+                raise OSError(f"no frames in {redact(self.source)}")
             if not self.loop:
                 return True
             offset += duration
@@ -226,7 +231,7 @@ class LiveCamera:
         try:
             while not self._stopping.is_set():
                 if not cap.grab():
-                    raise OSError(f"lost {self.source}")
+                    raise OSError(f"lost {redact(self.source)}")
                 if cadence.due(time.monotonic()):
                     ok, image = cap.retrieve()
                     if ok:
@@ -269,7 +274,7 @@ def _open(source):
         cap = cv.VideoCapture(text)
     if not cap.isOpened():
         cap.release()
-        raise OSError(f"cannot open {source}")
+        raise OSError(f"cannot open {redact(source)}")
     return cap
 
 

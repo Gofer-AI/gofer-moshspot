@@ -7,7 +7,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ENV_DIR="$(realpath -m "${EXPORT_ENV:-.export-env}")"
+mkdir -p "${EXPORT_ENV:-.export-env}"
+ENV_DIR="$(cd "${EXPORT_ENV:-.export-env}" && pwd)"  # portable: macOS realpath has no -m
 uv venv -q --allow-existing "$ENV_DIR" --python 3.12
 uv pip install -q --python "$ENV_DIR/bin/python" torch==2.14.1 torchvision==0.29.1 \
     --index-url https://download.pytorch.org/whl/cpu

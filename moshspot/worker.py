@@ -125,8 +125,11 @@ def main():
             agent.step(time.time())
             if time.monotonic() >= next_poll:
                 next_poll = time.monotonic() + 1.0
-                dispatcher.poll(*crowd())
-                dispatcher.publish(agent.incidents)
+                try:  # a bad bridge response must not take the worker down
+                    dispatcher.poll(*crowd())
+                    dispatcher.publish(agent.incidents)
+                except Exception:
+                    log.exception("dispatcher poll/publish failed; retrying next second")
                 (out / "traces.jsonl").write_text("".join(json.dumps({"incident": i.id, "state": i.state,
                                                                       "trace": i.trace}) + "\n" for i in agent.incidents))
                 (out / "health.json").write_text(json.dumps(health))

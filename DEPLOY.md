@@ -18,6 +18,47 @@ judge's browser ──HTTPS 443──► Caddy ──► bridge.py 127.0.0.1:878
 
 ---
 
+## Quick deploy with the AWS CLI (one command, auto-expires)
+
+`deploy/aws-deploy.sh` does steps 2–9 below for you: least-privilege IAM, a private bucket, the token in SSM, the instance, HTTPS, systemd services, and an expiry. `deploy/aws-teardown.sh` removes everything.
+
+```bash
+aws login                                    # sign in (AWS CLI v2)
+bash tools/export_models.sh                  # once: writes models/*.onnx
+git push                                     # the instance clones the exact pushed commit
+
+DOMAIN=moshspot.<your-domain> \
+AMI_ID=<COOL Graviton AMI id for your region> \
+RUN=<a recorded run in runs/, e.g. demo-s7-20261025220245> \
+HOSTED_ZONE_ID=<Route 53 zone, optional: creates the A record> \
+deploy/aws-deploy.sh
+```
+
+| Default | Why |
+|---|---|
+| `INSTANCE_TYPE=c8g.large` (2 vCPU / 4 GB, Graviton4) | the smallest size that runs the worker; if `journalctl -u moshspot-worker` shows it falling behind, redeploy with `c8g.xlarge` |
+| `WORKER_FPS=1` per camera | tiled detection is the expensive step; 1 fps still catches a fall (onset is judged over 2 s, immobility over 8 s) |
+| `MODE=live` | judges' browsers drive the sim. `MODE=replay` loops `RUN` with no browser |
+| `DAYS=20` | EventBridge Scheduler **terminates the instance** (and deletes the Route 53 record, so the name can't dangle at a recycled IP) when time is up. An on-instance timer is the backup. Bucket objects expire 2 days later |
+
+**Rough cost for 20 days**, on-demand in us-east-1: about $40. That's c8g.large ≈ $38, the public IPv4 address ≈ $2.40, and 20 GB of gp3 ≈ $1. **Add COOL's hourly software fee** after its free trial (see your listing). Set `BUDGET_USD=60 BUDGET_EMAIL=you@…` to get an alert.
+
+**What the script locks down:**
+- **Access:** no SSH (no key pair; port 22 closed; use `aws ssm start-session`), and only 443/80 are open.
+- **Instance:** IMDSv2 required with hop limit 1, and an encrypted root disk.
+- **Instance role:** it can read only its own bucket and its own SSM parameter.
+- **Token:** generated locally, stored as an SSM SecureString, and written root-only on the box. It never appears in user-data, command lines, or logs.
+- **Python dependencies:** installed with `--require-hashes` from `deploy/requirements*.lock.txt`.
+- **Code:** pinned to the commit you deployed.
+- **Services:** systemd sandboxing (`ProtectSystem=strict`, `NoNewPrivileges`, `PrivateDevices`, …).
+- **HTTPS:** Caddy with HSTS. The bridge also sends a CSP that only allows the page's own scripts (by hash) and the integrity-checked three.js.
+
+**The judge link** is written to `deploy/judge-link-<name>.txt` (gitignored, mode 600). **Never post it publicly** (not on the public Devpost page, the README, or the video): anyone with it can dispatch and stream. Give it to judges through a private channel, such as Devpost's judges-only fields or the organisers' email.
+
+The rest of this file is the same setup step by step, for when you want to do it by hand.
+
+---
+
 ## 1. Subscribe to COOL
 1. In AWS Marketplace, search for **COOL / Cloud Optimized OpenCV Library** (publisher: OpenCV) and pick the listing that matches the Graviton generation you'll launch. There are separate Graviton4 and Graviton5 listings.
 2. Check that listing's **OpenCV version, Python version, trial length and hourly software fee**. MoshSpot needs **OpenCV 5** (for `cv.dnn` ENGINE_NEW). If your listing ships 4.x, see [OpenCV fallback](#opencv-fallback).
@@ -212,7 +253,7 @@ T=$T python3 -c "import cv2,os; c=cv2.VideoCapture('http://127.0.0.1:8780/mjpeg/
 sudo apt-get install -y qrencode
 qrencode -o judge-qr.png "https://moshspot.<your-domain>/#token=<token>"
 ```
-Put the QR code on the Devpost page or a slide. The token is in the URL **fragment**, which browsers never send to the server. The page saves it for the tab and removes it from the address bar.
+Share the QR code or link **privately with judges** (a judges-only submission field or the organisers' email), never on a public page. The token is in the URL **fragment**, which browsers never send to the server. The page saves it for the tab and removes it from the address bar.
 
 The token gives **full control** (streaming frames, dispatching). There's no separate read-only role. **Rotate it after judging:** edit `/etc/moshspot/bridge.env`, then `sudo systemctl restart moshspot-bridge moshspot-worker`.
 

@@ -40,7 +40,7 @@ Don't run anything heavy alongside the worker. It needs the CPU to keep up with 
 | 2:45–3:25 | Architecture diagram (README / REPORT.md §2) | "Every vision step runs on OpenCV 5's new DNN engine: YOLO26 detection on tiles, pose on enlarged crops, and calibrated geometry that turns pixels into metres. The agent is code with guardrails: it can't dismiss a patient without persistent visual evidence. It all runs on one AWS Graviton instance from the COOL AMI, behind HTTPS." |
 | 3:25–4:10 | Results table (REPORT.md §6), then the range finding | "We tuned on one seeded run and tested on held-out runs. [Read the two headline numbers.] What limits it is range: a collapse is caught when a person standing at that spot is about 75 pixels tall in some camera. That's a camera placement rule, not a model limitation." |
 | 4:10–4:35 | A failure case from §7, and a privacy line | "It isn't perfect, and the report shows where it fails. It never identifies anyone, raw video never leaves memory, and a human dispatcher always stays in the loop." |
-| 4:35–4:45 | Logo plus the URL or QR code | "MoshSpot. Seconds, not minutes." |
+| 4:35–4:45 | Logo plus the repo URL (never the `#token=` judge link: the video is public) | "MoshSpot. Seconds, not minutes." |
 
 **Tips:**
 

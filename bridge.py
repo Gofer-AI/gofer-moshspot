@@ -28,7 +28,10 @@ Auth: when a token is set, every endpoint except the page itself and /status nee
 The page picks it up from its URL fragment: https://host/#token=<token>.
 """
 import argparse
+import base64
+import hashlib
 import hmac
+import math
 import json
 import os
 import re
@@ -42,7 +45,11 @@ from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
-SAFE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+SAFE = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,80}$")  # ids, run and camera names; never "." or ".."
+DIGITS = re.compile(r"^[0-9]{1,9}$")  # ASCII only: str.isdigit() also accepts "²" etc.
+EMT_STATUSES = {"dispatched", "accepted", "en_route", "on_scene", "resolved", "false_alarm", "cancelled",
+                "no_patient_found", "available", "rejected"}
+TEAM_STATUSES = {"available", "dispatched", "en_route", "on_scene", "returning"}
 ACTIONS = {"dispatch", "accept", "resolve", "false_alarm", "cancel"}
 PUBLIC_GET = {"/", "/index.html", "/status"}
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
@@ -57,6 +64,8 @@ class Config:
     max_gt_bytes: int = 32 << 20         # gt.json at the end of a run
     max_gt_frame_bytes: int = 1 << 20    # one line of gt_frames.jsonl
     max_json_bytes: int = 64 << 10       # dispatch commands, EMT events
+    max_run_gt_frames_bytes: int = 256 << 20  # per recorded run
+    stream_idle_s: float = 30.0          # end an MJPEG stream after this long with no new frame
     max_incidents_bytes: int = 1 << 20   # the worker's incident snapshot, traces included
     max_cams: int = 16
     max_teams: int = 64
@@ -100,8 +109,8 @@ def _validate_dispatch(cmd):
     if team is not None and not (isinstance(team, str) and SAFE.match(team)):
         return "bad team id"
     ext = cmd.get("incident_id")
-    if ext is not None and not (isinstance(ext, str) and len(ext) <= 80):
-        return "bad incident_id"
+    if ext is not None and not (isinstance(ext, str) and SAFE.match(ext)):
+        return "incident_id must match [A-Za-z0-9_.-]{1,80}"
     if action == "dispatch":
         try:
             float(cmd["X"]), float(cmd["Y"])
@@ -110,6 +119,56 @@ def _validate_dispatch(cmd):
     elif team is None and ext is None:
         return f"{action} needs team or incident_id"
     return None
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _clean_event(ev):
+    """Keep only known EMT-event fields with checked types, so nothing a token holder posts can crash the
+    worker or inject markup into a judge's page (incident_id is rendered there)."""
+    if not isinstance(ev, dict) or not (isinstance(ev.get("team"), str) and SAFE.match(ev["team"])):
+        return None
+    if ev.get("status") not in EMT_STATUSES:
+        return None
+    out = {"team": ev["team"], "status": ev["status"]}
+    for k in ("incident_id", "sim_incident"):
+        v = ev.get(k)
+        if v is not None:
+            if not (isinstance(v, str) and SAFE.match(v)):
+                return None
+            out[k] = v
+    for k in ("t", "X", "Y", "eta_s", "response_s"):
+        if _num(ev.get(k)):
+            out[k] = ev[k]
+    if isinstance(ev.get("clock"), str) and re.fullmatch(r"[0-9:]{1,8}", ev["clock"]):
+        out["clock"] = ev["clock"]
+    if isinstance(ev.get("patient_found"), bool):
+        out["patient_found"] = ev["patient_found"]
+    if ev.get("chosen_by") in ("dijkstra", "moshspot"):
+        out["chosen_by"] = ev["chosen_by"]
+    if isinstance(ev.get("reason"), str):
+        out["reason"] = re.sub(r"[^A-Za-z0-9 _().,-]", "", ev["reason"])[:80]
+    if isinstance(ev.get("ranking"), list):
+        out["ranking"] = [{"team": r["team"], "status": r.get("status") if r.get("status") in TEAM_STATUSES else None,
+                           "eta_s": r.get("eta_s") if _num(r.get("eta_s")) else None,
+                           "straight_m": r.get("straight_m") if _num(r.get("straight_m")) else None}
+                          for r in ev["ranking"][:16]
+                          if isinstance(r, dict) and isinstance(r.get("team"), str) and SAFE.match(r["team"])]
+    return out
+
+
+def _inline_script_hashes(html_path):
+    html = Path(html_path).read_text(encoding="utf-8")
+    bodies = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.S)
+    return " ".join("'sha256-%s'" % base64.b64encode(hashlib.sha256(b.encode()).digest()).decode() for b in bodies)
+
+
+# Only the page's own inline scripts (by hash) and the pinned three.js may run; the page talks only to us.
+CSP = ("default-src 'none'; script-src %s https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data: blob:; "
+       "style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+       % _inline_script_hashes(ROOT / "web" / "index.html"))
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -128,6 +187,8 @@ class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", CSP)
+        self.send_header("X-Frame-Options", "DENY")
         super().end_headers()
 
     def list_directory(self, path):
@@ -196,7 +257,7 @@ class Handler(SimpleHTTPRequestHandler):
                 st.cond.notify_all()
             if run:
                 idx = q.get("idx", "")
-                if not (idx.isdigit() and int(idx) < 1_000_000):
+                if not (DIGITS.match(idx) and int(idx) < 1_000_000):
                     return self._err(400, "idx must be 0..999999")
                 d = cfg.runs_dir / run / cam
                 d.mkdir(parents=True, exist_ok=True)
@@ -223,8 +284,8 @@ class Handler(SimpleHTTPRequestHandler):
             body = self._body(cfg.max_json_bytes)
             if body is None:
                 return
-            ev = _json(body)
-            if ev is None or not SAFE.match(str(ev.get("team", ""))):
+            ev = _clean_event(_json(body))
+            if ev is None:
                 return self._err(400, "bad event")
             with st.lock:
                 if ev["team"] not in st.teams and len(st.teams) >= cfg.max_teams:
@@ -240,8 +301,9 @@ class Handler(SimpleHTTPRequestHandler):
             if body is None:
                 return
             snapshot = _json(body)
-            if snapshot is None or not isinstance(snapshot.get("incidents"), list):
-                return self._err(400, 'body must be {"incidents": [...]}')
+            if snapshot is None or not isinstance(snapshot.get("incidents"), list) \
+                    or not all(isinstance(i, dict) for i in snapshot["incidents"]):
+                return self._err(400, 'body must be {"incidents": [{...}, ...]}')
             st.incidents = body
             return self._send(204)
 
@@ -257,7 +319,10 @@ class Handler(SimpleHTTPRequestHandler):
                 (d / "gt.json").write_bytes(body)
                 print(f"saved run -> {d}")
             else:
-                with open(d / "gt_frames.jsonl", "ab") as f:
+                gtf = d / "gt_frames.jsonl"
+                if gtf.exists() and gtf.stat().st_size > cfg.max_run_gt_frames_bytes:
+                    return self._err(413, "gt_frames.jsonl is full for this run")
+                with open(gtf, "ab") as f:
                     f.write(body.rstrip(b"\n") + b"\n")
             return self._send(204)
 
@@ -273,7 +338,7 @@ class Handler(SimpleHTTPRequestHandler):
         if u.path not in PUBLIC_GET and not self._authorized(q):
             self.close_connection = True
             return self._err(401, "token required")
-        after = int(q["after"]) if q.get("after", "").isdigit() else 0
+        after = int(q["after"]) if DIGITS.match(q.get("after", "")) else 0
         if u.path == "/commands":
             with st.lock:
                 return self._send(200, json.dumps({"commands": [c for c in st.commands if c["id"] > after],
@@ -306,14 +371,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
-            last = None
+            last, idle = None, 0
             while True:
                 with st.cond:
-                    st.cond.wait_for(lambda: st.latest.get(cam) is not last, timeout=10)
+                    st.cond.wait_for(lambda: st.latest.get(cam) is not last, timeout=st.cfg.stream_idle_s / 3)
                     frame = st.latest.get(cam)
                 if frame is None or frame is last:
+                    idle += 1
+                    if idle >= 3:  # no frame for stream_idle_s: end the stream so a gone client can't hold a slot
+                        break
                     continue
-                last = frame
+                last, idle = frame, 0
                 self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(frame))
                 self.wfile.write(frame + b"\r\n")
         except OSError:  # client went away or stalled past the socket timeout

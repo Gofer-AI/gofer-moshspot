@@ -49,7 +49,8 @@ class Dispatcher:
         events = self._get(f"/emt?after={self._last_event}")
         for event in events.get("events", []):
             self._last_event = max(self._last_event, event.get("seq", 0))
-            job = self.jobs.get(event.get("incident_id") or "")
+            iid = event.get("incident_id")
+            job = self.jobs.get(iid) if isinstance(iid, str) else None  # never trust event shapes
             if job is None:
                 job = next((j for j in self.jobs.values() if j.get("team") == event.get("team")
                             and j["status"] not in ("resolved", "false_alarm", "cancelled")), None)
