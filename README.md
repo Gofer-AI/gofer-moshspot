@@ -1,8 +1,72 @@
-# MoshSpot Sim — Gofer AI
+# MoshSpot — Gofer AI
 
-**MoshSpot** turns existing crowd cameras at concerts and festivals into tireless spotters: it detects a person who collapses and stays down, verifies the event, pins the person on the venue map, and dispatches the nearest EMT team. It is Gofer AI's entry to the [OpenCV AI Competition 2026](https://opencv26.devpost.com).
+**MoshSpot** turns existing crowd cameras at concerts and festivals into tireless spotters:
 
-This repo is MoshSpot's test rig: a lightweight browser simulation of a concert: a venue layout, a crowd of up to 3,000 people, and 4 fixed CCTV-style cameras. Its frames go straight into the MoshSpot worker, and it writes exact ground truth for the evaluation harness. No build step and no GPU. Three.js comes from a CDN, and the bridge uses only the Python standard library.
+1. It detects a person who collapses.
+2. It recognises the bystanders gathering around them.
+3. An agent verifies the event.
+4. It pins the person on the venue map.
+5. It dispatches the EMT team with the shortest walking time.
+
+It's Gofer AI's entry to the [OpenCV AI Competition 2026](https://opencv26.devpost.com). Every vision step runs on **OpenCV 5** (the new DNN engine and calibration geometry), on **AWS Graviton with COOL**.
+
+| | |
+|---|---|
+| **Judges: how to test it** (live demo, things to try, run it yourself) | [docs/JUDGES.md](docs/JUDGES.md) |
+| **Technical report** (architecture, OpenCV 5 implementation, agent, AWS, evaluation, limitations) | [docs/REPORT.md](docs/REPORT.md) |
+| Problem statement and PRD | [docs/PRD.md](docs/PRD.md) |
+| Dev log: measured findings | [docs/DEVLOG.md](docs/DEVLOG.md) |
+| Deploying to AWS Graviton + COOL | [DEPLOY.md](DEPLOY.md) |
+
+The repo has two halves:
+
+- **`moshspot/`** is the worker that watches the cameras and dispatches. Its pieces:
+  - ingest;
+  - perception (tiled YOLO26n detection and top-down pose via `cv.dnn` ENGINE_NEW);
+  - calibrated geometry;
+  - help-ring and fall logic;
+  - the incident agent;
+  - the dispatcher.
+- **`web/` + `bridge.py` + `score.py`** form **MoshSpot Sim**: a seeded concert simulator with exact ground truth. The worker is evaluated against it, and it closes the loop: dispatched EMT teams walk to the patient.
+
+### Run the worker (laptop)
+
+You need [uv](https://docs.astral.sh/uv/), which installs Python 3.12. Install the pinned dependencies, including OpenCV 5.0.0, then export the YOLO ONNX models in a throwaway environment:
+
+```bash
+uv sync --locked --extra local
+bash tools/export_models.sh
+```
+
+**Score a recorded run.** Start `python3 bridge.py --record`, open http://localhost:8780, choose **Eval** and a seed, and click **Record run**. Then cache detection and pose once per run:
+
+```bash
+uv run python tools/perceive_run.py runs/<run>
+```
+
+Run the decision logic, which writes `alerts.jsonl` and `traces.jsonl` and then runs `score.py`:
+
+```bash
+uv run python tools/evaluate_run.py runs/<run>
+```
+
+**Live closed loop.** With the sim open in a browser, MoshSpot watches the four MJPEG camera streams and dispatches through the bridge, and the EMT teams walk to the patient:
+
+```bash
+uv run python -m moshspot.worker --calibration runs/<run>/gt.json
+```
+
+**Tests:**
+
+```bash
+uv run pytest
+```
+
+---
+
+# MoshSpot Sim — the test rig
+
+A lightweight browser simulation of a concert: a venue layout, a crowd of up to 3,000 people, and 4 fixed CCTV-style cameras. Its frames go straight into the MoshSpot worker, and it writes exact ground truth for the evaluation harness. No build step and no GPU. Three.js comes from a CDN, and the bridge uses only the Python standard library.
 
 ```bash
 python3 bridge.py --record   # → http://localhost:8780  (PORT env var to change; --record allows saving runs)

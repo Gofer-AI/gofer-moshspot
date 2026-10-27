@@ -70,6 +70,19 @@ class WithToken(BridgeCase):
         self.assertEqual(self.req("GET", "/../bridge.py", token=TOKEN)[0], 404)
 
 
+class Incidents(BridgeCase):
+    cfg_kwargs = {"token": TOKEN}
+
+    def test_worker_publishes_and_page_reads_incidents(self):
+        self.assertEqual(self.req("GET", "/incidents")[0], 401)
+        self.assertEqual(self.req("POST", "/incidents", {"incidents": []})[0], 401)
+        snapshot = {"incidents": [{"id": "ms-1", "state": "alerted", "X": 1.5, "Y": 30.2, "trace": []}]}
+        self.assertEqual(self.req("POST", "/incidents", snapshot, token=TOKEN)[0], 204)
+        code, body = self.req("GET", "/incidents", token=TOKEN)
+        self.assertEqual((code, json.loads(body)), (200, snapshot))
+        self.assertEqual(self.req("POST", "/incidents", {"incidents": "nope"}, token=TOKEN)[0], 400)
+
+
 class Limits(BridgeCase):
     cfg_kwargs = {"queue_len": 5, "max_frame_bytes": 1000, "max_cams": 2}
 
@@ -91,10 +104,11 @@ class Limits(BridgeCase):
         self.assertEqual(d["last"], 12)
         self.assertEqual([c["id"] for c in d["commands"]], [8, 9, 10, 11, 12])
         self.assertEqual([c["id"] for c in json.loads(self.req("GET", "/commands?after=10")[1])["commands"]], [11, 12])
-        for i in range(8):
-            self.req("POST", "/emt-events", {"team": "EMT-1", "status": f"s{i}"})
+        statuses = ["dispatched", "accepted", "en_route", "on_scene", "resolved", "available", "dispatched", "accepted"]
+        for status in statuses:
+            self.assertEqual(self.req("POST", "/emt-events", {"team": "EMT-1", "status": status})[0], 204)
         e = json.loads(self.req("GET", "/emt")[1])
-        self.assertEqual((len(e["events"]), e["last"], e["teams"]["EMT-1"]["status"]), (5, 8, "s7"))
+        self.assertEqual((len(e["events"]), e["last"], e["teams"]["EMT-1"]["status"]), (5, 8, "accepted"))
 
     def test_bad_input(self):
         self.assertEqual(self.req("POST", "/dispatch", {"action": "warp"})[0], 400)

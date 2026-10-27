@@ -18,6 +18,49 @@ judge's browser ──HTTPS 443──► Caddy ──► bridge.py 127.0.0.1:878
 
 ---
 
+## Quick deploy with the AWS CLI (one command, auto-expires)
+
+`deploy/aws-deploy.sh` does steps 2–9 below for you: least-privilege IAM, a private bucket, the token in SSM, the instance, HTTPS, systemd services, and an expiry. `deploy/aws-teardown.sh` removes everything.
+
+```bash
+aws login                                    # sign in (AWS CLI v2)
+bash tools/export_models.sh                  # once: writes models/*.onnx
+git push                                     # the instance clones the exact pushed commit
+
+DOMAIN=moshspot.<your-domain> \
+AMI_ID=<COOL Graviton AMI id for your region> \
+RUN=<a recorded run in runs/, e.g. demo-s7-20261025220245> \
+HOSTED_ZONE_ID=<Route 53 zone, optional: creates the A record> \
+deploy/aws-deploy.sh
+```
+
+**DNS on Vercel (goferai.space):** leave `HOSTED_ZONE_ID` unset. The script ends by printing the record to add: type `A`, name `moshspot`, value = the instance IP, TTL 60. Add it under Vercel → Domains → goferai.space → DNS Records, or run `vercel dns add goferai.space moshspot A <IP>`. **Delete it when the demo ends:** the AWS expiry can't reach Vercel, and a record left pointing at a released IP can be taken over.
+
+| Default | Why |
+|---|---|
+| `INSTANCE_TYPE=c8g.large` (2 vCPU / 4 GB, Graviton4) | the smallest size that runs the worker; if `journalctl -u moshspot-worker` shows it falling behind, redeploy with `c8g.xlarge` |
+| `WORKER_FPS=1` per camera | tiled detection is the expensive step; 1 fps still catches a fall (onset is judged over 2 s, immobility over 8 s) |
+| `MODE=live` | judges' browsers drive the sim. `MODE=replay` loops `RUN` with no browser |
+| `DAYS=20` | EventBridge Scheduler **terminates the instance** (and deletes the Route 53 record, so the name can't dangle at a recycled IP) when time is up. An on-instance timer is the backup. Bucket objects expire 2 days later |
+
+**Rough cost for 20 days**, on-demand in us-east-1: about $40. That's c8g.large ≈ $38, the public IPv4 address ≈ $2.40, and the 50 GB gp3 root disk the COOL image requires ≈ $2.70. **Add COOL's hourly software fee** after its free trial (see your listing). Set `BUDGET_USD=60 BUDGET_EMAIL=you@…` to get an alert.
+
+**What the script locks down:**
+- **Access:** no SSH (no key pair; port 22 closed; use `aws ssm start-session`), and only 443/80 are open.
+- **Instance:** IMDSv2 required with hop limit 1, and an encrypted root disk.
+- **Instance role:** it can read only its own bucket and its own SSM parameter.
+- **Token:** generated locally, stored as an SSM SecureString, and written root-only on the box. It never appears in user-data, command lines, or logs.
+- **Python dependencies:** installed with `--require-hashes` from `deploy/requirements*.lock.txt`.
+- **Code:** pinned to the commit you deployed.
+- **Services:** systemd sandboxing (`ProtectSystem=strict`, `NoNewPrivileges`, `PrivateDevices`, …).
+- **HTTPS:** Caddy with HSTS. The bridge also sends a CSP that only allows the page's own scripts (by hash) and the integrity-checked three.js.
+
+**The judge link** is written to `deploy/judge-link-<name>.txt` (gitignored, mode 600). **Never post it publicly** (not on the public Devpost page, the README, or the video): anyone with it can dispatch and stream. Give it to judges through a private channel, such as Devpost's judges-only fields or the organisers' email.
+
+The rest of this file is the same setup step by step, for when you want to do it by hand.
+
+---
+
 ## 1. Subscribe to COOL
 1. In AWS Marketplace, search for **COOL / Cloud Optimized OpenCV Library** (publisher: OpenCV) and pick the listing that matches the Graviton generation you'll launch. There are separate Graviton4 and Graviton5 listings.
 2. Check that listing's **OpenCV version, Python version, trial length and hourly software fee**. MoshSpot needs **OpenCV 5** (for `cv.dnn` ENGINE_NEW). If your listing ships 4.x, see [OpenCV fallback](#opencv-fallback).
@@ -58,8 +101,34 @@ If COOL installs its own Python, use that interpreter everywhere below; the list
 ```bash
 sudo useradd --system --create-home --home-dir /opt/moshspot --shell /usr/sbin/nologin moshspot
 sudo -u moshspot git clone https://github.com/Gofer-AI/gofer-moshspot /opt/moshspot/sim
-sudo -u moshspot mkdir -p /opt/moshspot/sim/runs
-# plus the MoshSpot worker repo, e.g. /opt/moshspot/worker
+sudo -u moshspot mkdir -p /opt/moshspot/sim/runs /opt/moshspot/sim/models
+```
+
+**The worker lives in the same repo (`moshspot/`).** Install it into COOL's Python, so it runs on COOL's `cv2` build. The path below comes from the Graviton4 listing's usage notes; use whatever path your listing gives.
+
+Install the worker without its pip OpenCV wheel, then install scipy:
+
+```bash
+sudo /opt/cool/venvs/python_3.12/bin/python -m pip install --no-deps -e /opt/moshspot/sim
+sudo /opt/cool/venvs/python_3.12/bin/python -m pip install "scipy>=1.18"
+```
+
+Check that it picks up COOL's OpenCV 5:
+
+```bash
+/opt/cool/venvs/python_3.12/bin/python -c "import cv2, moshspot.worker; print(cv2.__version__)"
+```
+
+**Models.** The ONNX models are portable, so export them on a laptop (`bash tools/export_models.sh`) and copy them up. From the laptop:
+
+```bash
+aws s3 cp --recursive models/ s3://<bucket>/models/ --exclude "*.pt"
+```
+
+On the instance:
+
+```bash
+sudo -u moshspot aws s3 cp --recursive s3://<bucket>/models/ /opt/moshspot/sim/models/
 ```
 
 ## 5. Create the token
@@ -105,7 +174,40 @@ TOKEN = os.environ["MOSHSPOT_TOKEN"]
 cap = cv.VideoCapture(f"http://127.0.0.1:8780/mjpeg/CAM-1?token={TOKEN}")
 requests.post("http://127.0.0.1:8780/dispatch", json={...}, headers={"Authorization": f"Bearer {TOKEN}"})
 ```
-Give the worker its own `moshspot-worker.service` with `EnvironmentFile=/etc/moshspot/bridge.env` and the worker's start command.
+The worker gets its own service, `/etc/systemd/system/moshspot-worker.service`. It needs a calibration file: any recorded run's `gt.json` at the same resolution works, because the cameras are fixed.
+
+```ini
+[Unit]
+Description=MoshSpot worker (OpenCV 5 / COOL)
+After=moshspot-bridge.service
+Wants=moshspot-bridge.service
+
+[Service]
+User=moshspot
+EnvironmentFile=/etc/moshspot/bridge.env
+WorkingDirectory=/opt/moshspot/sim
+# Live sim: watch the bridge's MJPEG streams and dispatch the sim's EMT teams.
+# For the always-on demo with no browser, add: --replay /opt/moshspot/sim/runs/<run>
+ExecStart=/opt/cool/venvs/python_3.12/bin/python -m moshspot.worker --bridge http://127.0.0.1:8780 --calibration /opt/moshspot/sim/runs/<run>/gt.json --out /opt/moshspot/sim/runs/live
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/moshspot/sim/runs
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable it, then follow its log:
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now moshspot-worker
+journalctl -u moshspot-worker -f     # "watching CAM-1, CAM-2, CAM-3, CAM-4", then help rings, ALERT and dispatch lines
+```
+
+Alerts go to `runs/live/alerts.jsonl`, and the agent's step-by-step traces to `runs/live/traces.jsonl`.
 
 ## 7. HTTPS with Caddy
 Install Caddy from its official apt repository (follow the Debian/Ubuntu steps at caddyserver.com/docs/install). Then set `/etc/caddy/Caddyfile`:
@@ -153,7 +255,7 @@ T=$T python3 -c "import cv2,os; c=cv2.VideoCapture('http://127.0.0.1:8780/mjpeg/
 sudo apt-get install -y qrencode
 qrencode -o judge-qr.png "https://moshspot.<your-domain>/#token=<token>"
 ```
-Put the QR code on the Devpost page or a slide. The token is in the URL **fragment**, which browsers never send to the server. The page saves it for the tab and removes it from the address bar.
+Share the QR code or link **privately with judges** (a judges-only submission field or the organisers' email), never on a public page. The token is in the URL **fragment**, which browsers never send to the server. The page saves it for the tab and removes it from the address bar.
 
 The token gives **full control** (streaming frames, dispatching). There's no separate read-only role. **Rotate it after judging:** edit `/etc/moshspot/bridge.env`, then `sudo systemctl restart moshspot-bridge moshspot-worker`.
 
@@ -163,7 +265,31 @@ Record runs locally (`python3 bridge.py --record`, then **Record run** in the pa
 aws s3 sync runs/demo-s7-20261025220245 s3://<bucket>/runs/demo-s7-20261025220245     # from your laptop
 aws s3 sync s3://<bucket>/runs/demo-s7-20261025220245 /opt/moshspot/sim/runs/demo-s7-20261025220245   # on the instance
 ```
-Point the worker's replay mode at `runs/<run>/CAM-n/%06d.jpg`, at the `fps` in that run's `gt.json`.
+Point the worker at the run with `--replay runs/<run>`. It loops all four cameras at real speed, timed by the `fps` in that run's `gt.json`.
+
+## 10b. COOL benchmark (Best Use of COOL award)
+
+Run the same benchmark on each configuration and commit the JSON files it writes to `eval/results/`:
+
+| Configuration | Interpreter |
+|---|---|
+| c8g + COOL | COOL's Python |
+| c8g + stock OpenCV | a plain venv with `pip install opencv-python==5.0.0.93` |
+| c7i (x86) + stock OpenCV | the laptop or an x86 instance |
+
+On c8g with COOL, for example:
+
+```bash
+cd /opt/moshspot/sim && /opt/cool/venvs/python_3.12/bin/python tools/benchmark_cool.py runs/<run> --frames 60 \
+    --price-per-hour <c8g.xlarge on-demand + COOL fee> --label c8g-cool
+```
+
+Each file records:
+
+- per-stage milliseconds: decode, imgproc, tiled detection, full perception;
+- cameras at 5 fps per instance;
+- $ per camera-hour;
+- the KleidiCV/HAL lines from `cv2.getBuildInformation()`, which prove which build ran.
 
 ## OpenCV fallback
 If the COOL listing for your instance doesn't ship OpenCV 5 yet, stay on Graviton and install the `opencv-python` 5.x aarch64 wheel in a virtualenv for the worker. Benchmark both if you're entering the COOL award: the award is for *using* COOL, so keep the COOL build wherever its version is enough.
@@ -176,6 +302,5 @@ You pay EC2 on-demand for the instance, plus the COOL hourly software fee after 
 ```
 
 ## Not covered here
-- The worker's own build and config (it lives in its own repo).
-- CloudWatch logs and alarms.
+- CloudWatch logs and alarms (the services log to journald; the CloudWatch agent can ship them).
 - Autoscaling, and multiple simultaneous live sims (that needs per-session camera IDs in the bridge).
